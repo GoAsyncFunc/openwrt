@@ -243,7 +243,9 @@ define Device/lunzn_fastrhino-r66s
   $(Device/rk3568)
   DEVICE_VENDOR := Lunzn
   DEVICE_MODEL := FastRhino R66S
-  DEVICE_PACKAGES := kmod-r8169
+  DEVICE_DTS := rk3568-r66s
+  SUPPORTED_DEVICES += fastrhino,r66s
+  DEVICE_PACKAGES := kmod-r8125-rss
 endef
 TARGET_DEVICES += lunzn_fastrhino-r66s
 

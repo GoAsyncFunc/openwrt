@@ -23,6 +23,7 @@ rockchip_setup_interfaces()
 	xunlong,orangepi-r1-plus-lts)
 		ucidef_set_interfaces_lan_wan 'eth1' 'eth0'
 		;;
+	fastrhino,r66s|\
 	friendlyarm,nanopc-t6|\
 	friendlyarm,nanopi-r5c|\
 	friendlyarm,nanopi-r76s|\
@@ -80,6 +81,7 @@ rockchip_setup_macs()
 
 	case "$board" in
 	armsom,sige7|\
+	fastrhino,r66s|\
 	friendlyarm,nanopc-t6|\
 	friendlyarm,nanopi-m5|\
 	friendlyarm,nanopi-r2c|\

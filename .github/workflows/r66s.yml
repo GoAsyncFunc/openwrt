@@ -1,0 +1,129 @@
+name: Build R66S firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [r66s]
+    paths:
+      - '.github/workflows/r66s.yml'
+      - 'config/r66s-lede.config'
+      - 'contrib/r66s/**'
+      - 'target/linux/rockchip/**'
+      - 'target/linux/generic/**'
+      - 'package/kernel/r8125/**'
+      - 'package/boot/uboot-rockchip/**'
+      - 'package/boot/rkbin/**'
+      - 'include/**'
+      - 'toolchain/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r66s-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev libelf-dev python3 python3-dev \
+            python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev \
+            file wget curl ca-certificates bzip2 xz-utils zstd patch \
+            diffutils perl time cpio bc device-tree-compiler
+          mkdir -p logs
+          df -h .
+
+      - name: Restore downloaded sources
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: r66s-dl-${{ runner.os }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
+          restore-keys: |
+            r66s-dl-${{ runner.os }}-
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a 2>&1 | tee logs/feeds-update.log
+          ./scripts/feeds install -a 2>&1 | tee logs/feeds-install.log
+
+      - name: Configure R66S and check driver selection
+        run: |
+          cp config/r66s-lede.config .config
+          make defconfig 2>&1 | tee logs/defconfig.log
+          grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config
+          grep -qx 'CONFIG_PACKAGE_kmod-r8125-rss=y' .config
+          grep -qx 'CONFIG_PACKAGE_luci=y' .config
+          if grep -Eq '^CONFIG_PACKAGE_kmod-(r8169|r8125)=[ym]$' .config; then
+            echo 'Unexpected competing Realtek driver selected' >&2
+            exit 1
+          fi
+          ./scripts/diffconfig.sh > logs/config.seed
+          git rev-parse HEAD > logs/source-commit.txt
+          git diff --check
+          sh -n target/linux/rockchip/armv8/base-files/etc/board.d/02_network
+          sh -n target/linux/rockchip/armv8/base-files/etc/hotplug.d/net/40-net-smp-affinity
+
+      - name: Download sources
+        run: make download -j4 2>&1 | tee logs/download.log
+
+      - name: Build firmware
+        run: make -j2 V=s 2>&1 | tee logs/build.log
+
+      - name: Verify R66S artifacts
+        run: |
+          shopt -s nullglob
+          images=(bin/targets/rockchip/armv8/*-lunzn_fastrhino-r66s-squashfs-sysupgrade.img.gz)
+          test "${#images[@]}" -eq 1
+          image="${images[0]}"
+          test -s "$image"
+          gzip -t "$image"
+          manifest="${image%-squashfs-sysupgrade.img.gz}.manifest"
+          grep -q '^kmod-r8125-rss ' "$manifest"
+          if grep -Eq '^kmod-(r8169|r8125) ' "$manifest"; then
+            echo 'Unexpected competing Realtek driver in image manifest' >&2
+            exit 1
+          fi
+          mapfile -t dtbs < <(find build_dir -name image-rk3568-r66s.dtb -type f)
+          test "${#dtbs[@]}" -eq 1
+          test "$(fdtget "${dtbs[0]}" / compatible)" = 'fastrhino,r66s rockchip,rk3568'
+          echo 'Firmware build and artifact checks passed. Hardware boot and DHCP still need testing.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware and build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: r66s-firmware-${{ github.run_number }}
+          path: |
+            bin/targets/rockchip/armv8/*r66s*.img.gz
+            bin/targets/rockchip/armv8/*r66s*.manifest
+            bin/targets/rockchip/armv8/profiles.json
+            bin/targets/rockchip/armv8/sha256sums
+            bin/targets/rockchip/armv8/*.buildinfo
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload logs and resolved configuration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r66s-logs-${{ github.run_number }}
+          include-hidden-files: true
+          path: |
+            logs/
+            .config
+          if-no-files-found: warn
+          retention-days: 14

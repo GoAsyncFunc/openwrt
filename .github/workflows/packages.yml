@@ -19,6 +19,7 @@ on:
       - 'toolchain/**'
     branches-ignore:
       - master
+      - r66s
   workflow_dispatch:
 
 permissions:
