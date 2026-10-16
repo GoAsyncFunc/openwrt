@@ -53,7 +53,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: r66s-dl-${{ runner.os }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
+          key: r66s-dl-${{ runner.os }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default', 'contrib/r66s/prepare-openclash.sh') }}
           restore-keys: |
             r66s-dl-${{ runner.os }}-
 
@@ -65,11 +65,21 @@ jobs:
       - name: Configure R66S and check driver selection
         run: |
           sh contrib/r66s/prepare-defaults.sh
+          sh contrib/r66s/prepare-openclash.sh | tee logs/openclash-sources.log
           cp config/r66s-lede.config .config
           make defconfig 2>&1 | tee logs/defconfig.log
           grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config
           grep -qx 'CONFIG_PACKAGE_kmod-r8125-rss=y' .config
           grep -qx 'CONFIG_PACKAGE_luci=y' .config
+          for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config
+          done
+          grep -qx 'CONFIG_PACKAGE_dnsmasq_full_nftset=y' .config
+          grep -qx 'CONFIG_PACKAGE_dnsmasq_full_dhcp=y' .config
+          if grep -Eq '^CONFIG_PACKAGE_(dnsmasq|ip-tiny)=[ym]$' .config; then
+            echo 'Unexpected minimal dnsmasq/ip package selected' >&2
+            exit 1
+          fi
           if grep -Eq '^CONFIG_PACKAGE_kmod-(r8169|r8125)=[ym]$' .config; then
             echo 'Unexpected competing Realtek driver selected' >&2
             exit 1
@@ -103,6 +113,20 @@ jobs:
           gzip -t "$payload"
           manifest="${image%-squashfs-sysupgrade.img.gz}.manifest"
           grep -q '^kmod-r8125-rss ' "$manifest"
+          for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
+            grep -q "^${package} " "$manifest"
+          done
+          if grep -Eq '^(dnsmasq|ip-tiny) ' "$manifest"; then
+            echo 'Unexpected minimal dnsmasq/ip package in firmware' >&2
+            exit 1
+          fi
+          roots=(build_dir/target-*/root-rockchip)
+          test "${#roots[@]}" -eq 1
+          test -x "${roots[0]}/etc/openclash/core/clash_meta"
+          test -s "${roots[0]}/etc/openclash/Country.mmdb"
+          test -s "${roots[0]}/etc/openclash/GeoSite.dat"
+          file "${roots[0]}/etc/openclash/core/clash_meta" | grep -q 'ARM aarch64'
+          grep -Fq 'lan) ipad=${ipaddr:-"192.168.77.1"}' "${roots[0]}/bin/config_generate"
           if grep -Eq '^kmod-(r8169|r8125) ' "$manifest"; then
             echo 'Unexpected competing Realtek driver in image manifest' >&2
             exit 1

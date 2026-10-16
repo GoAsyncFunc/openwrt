@@ -86,6 +86,33 @@ artifact from the run for the image, checksums and build metadata. The
 Artifacts are retained for 14 days. A green workflow verifies compilation
 and artifact checks, not hardware boot or DHCP operation.
 
+## Bundled OpenClash
+
+The R66S configuration selects OpenClash and its runtime dependencies for
+Firewall4/nftables: `luci-compat`, `dnsmasq-full` with DHCP and nftset support,
+`ip-full`, Bash, curl, CA certificates, Ruby/YAML, unzip, TUN, inet-diag and
+nft-tproxy kernel modules. The minimal `dnsmasq` and `ip-tiny` packages are
+disabled to avoid conflicting providers.
+
+Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` (already
+included in Actions). It verifies SHA-256 hashes for the official OpenClash
+source archive and ARM64 Meta core, both pinned to immutable commit IDs in
+the script. Sources and downloads are cached under `dl/r66s-openclash`, and
+the generated package is linked under the ignored `package/openwrt-packages`
+directory. No upstream package or feed definitions are replaced.
+
+The core is installed at `/etc/openclash/core/clash_meta`. Country.mmdb,
+GeoSite.dat, dashboards and editor assets come from the pinned OpenClash
+source. The preparation step sets the core update architecture to
+`linux-arm64` and declares the missing `luci-base/host` build dependency
+for `po2lmo` in the downloaded package copy. OpenClash remains disabled
+until a subscription/configuration is imported and the user enables it.
+No subscription, credentials or proxy rules are embedded. Additional rule
+providers or datasets requested by a user's configuration may still need
+network access. Actions checks package selection, the firmware manifest,
+core architecture, bundled datasets and the baked-in LAN address.
+Compilation does not verify proxy connectivity or routing on hardware.
+
 ## Hardware verification
 
 For the first test, use a spare microSD card and a clean configuration.
