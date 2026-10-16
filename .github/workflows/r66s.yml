@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/r66s.yml'
       - 'config/r66s-lede.config'
+      - 'files/**'
       - 'contrib/r66s/**'
       - 'target/linux/rockchip/**'
       - 'target/linux/generic/**'

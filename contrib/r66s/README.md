@@ -65,7 +65,13 @@ Downloaded sources are cached; feed revisions and the full resolved
 configuration are saved with the build artifacts.
 
 The configuration enables LuCI and ethtool, with a 512 MiB SquashFS root
-partition. It does not embed a password or change the official default LAN IP.
+partition. It does not embed a password. The independent `files/` overlay
+installs `files/etc/uci-defaults/99-r66s-lan-ip`, which changes the R66S LAN
+address from the upstream default to `192.168.77.1/24` on first boot.
+DHCP uses the resulting `192.168.77.0/24` subnet. Upstream network generation
+and board scripts are unchanged. An existing custom LAN address is preserved
+when upgrading with saved settings; a saved `192.168.1.1` default is changed
+to `192.168.77.1/24` as well. The script also runs after a factory reset.
 
 After a successful build, the workflow checks the compressed firmware,
 using `fwtool` to strip appended signature/metadata from a temporary copy
@@ -89,8 +95,8 @@ before checking the physical LAN/WAN mapping.
    The configured serial console is UART2, 1500000 baud; verify header pinout
    and voltage before connecting an adapter.
 2. Connect a computer directly to each port in turn. On the LAN port it
-   should receive a DHCP lease and reach the unmodified default LAN address
-   `192.168.1.1`. On WAN it should not receive a lease from this router.
+   should receive a `192.168.77.x` DHCP lease and reach the default LAN address
+   `192.168.77.1`. On WAN it should not receive a lease from this router.
 3. Confirm `ubus call system board`, `ip link`, `lspci -nnk` (if installed),
    `ethtool -i eth0`, `ethtool -i eth1`, and `dmesg` show the expected board,
    both NICs, `r8125`, and no PCIe/SD card errors. Check `/proc/interrupts`
