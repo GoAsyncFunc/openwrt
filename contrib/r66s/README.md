@@ -68,6 +68,9 @@ The configuration enables LuCI and ethtool, with a 512 MiB SquashFS root
 partition. It does not embed a password or change the official default LAN IP.
 
 After a successful build, the workflow checks the compressed firmware,
+using `fwtool` to strip appended signature/metadata from a temporary copy
+before running `gzip -t`. The original upgrade image is kept intact, and
+both R66S board IDs are checked in the extracted metadata. It also checks
 the package manifest (RSS driver present, competing drivers absent), and the
 compiled device tree's runtime board ID. Download the `r66s-firmware-N`
 artifact from the run for the image, checksums and build metadata. The

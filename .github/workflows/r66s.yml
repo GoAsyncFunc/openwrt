@@ -91,7 +91,14 @@ jobs:
           test "${#images[@]}" -eq 1
           image="${images[0]}"
           test -s "$image"
-          gzip -t "$image"
+          # OpenWrt appends fwtool metadata (and optionally a signature)
+          # after gzip. Validate a stripped copy, preserving the upgrade image.
+          payload=$(mktemp "$RUNNER_TEMP/r66s-payload.XXXXXX")
+          cp "$image" "$payload"
+          staging_dir/host/bin/fwtool -s /dev/null -t "$payload" || :
+          staging_dir/host/bin/fwtool -i logs/image-metadata.json -t "$payload"
+          jq -e '.supported_devices | index("lunzn,fastrhino-r66s") != null and index("fastrhino,r66s") != null' logs/image-metadata.json
+          gzip -t "$payload"
           manifest="${image%-squashfs-sysupgrade.img.gz}.manifest"
           grep -q '^kmod-r8125-rss ' "$manifest"
           if grep -Eq '^kmod-(r8169|r8125) ' "$manifest"; then
