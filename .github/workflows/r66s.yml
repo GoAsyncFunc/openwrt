@@ -64,6 +64,7 @@ jobs:
 
       - name: Configure R66S and check driver selection
         run: |
+          sh contrib/r66s/prepare-defaults.sh
           cp config/r66s-lede.config .config
           make defconfig 2>&1 | tee logs/defconfig.log
           grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config

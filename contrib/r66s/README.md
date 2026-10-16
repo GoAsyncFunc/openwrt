@@ -65,13 +65,15 @@ Downloaded sources are cached; feed revisions and the full resolved
 configuration are saved with the build artifacts.
 
 The configuration enables LuCI and ethtool, with a 512 MiB SquashFS root
-partition. It does not embed a password. The independent `files/` overlay
-installs `files/etc/uci-defaults/99-r66s-lan-ip`, which changes the R66S LAN
-address from the upstream default to `192.168.77.1/24` on first boot.
-DHCP uses the resulting `192.168.77.0/24` subnet. Upstream network generation
-and board scripts are unchanged. An existing custom LAN address is preserved
-when upgrading with saved settings; a saved `192.168.1.1` default is changed
-to `192.168.77.1/24` as well. The script also runs after a factory reset.
+partition. It does not embed a password. During compilation, the workflow runs
+`sh contrib/r66s/prepare-defaults.sh` to generate `files/bin/config_generate`
+from the upstream network generator, with its default LAN IP already set to
+`192.168.77.1`. The normal `/24` mask is retained. This copy is packaged into
+the firmware through the standard build overlay; no additional first-boot
+address-changing script is installed. Upstream source and board scripts are
+unchanged. Run the same preparation command before a manual local build.
+Clean installations and factory resets use `192.168.77.1/24`, and DHCP uses
+`192.168.77.0/24`. Upgrades retaining settings keep the saved LAN address.
 
 After a successful build, the workflow checks the compressed firmware,
 using `fwtool` to strip appended signature/metadata from a temporary copy
