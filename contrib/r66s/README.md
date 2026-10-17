@@ -132,6 +132,38 @@ network access. Actions checks package selection, the firmware manifest,
 core architecture, bundled datasets and the baked-in LAN address.
 Compilation does not verify proxy connectivity or routing on hardware.
 
+## Private preconfigured OpenClash firmware
+
+The public firmware workflow remains generic: OpenClash is disabled until
+configured. Personal subscription URLs and node credentials must never be
+committed here or injected into this public workflow.
+
+`prepare-personal-openclash.py` accepts a private JSON bundle on stdin and
+generates a build overlay with a complete, downloaded `GPT.yaml` plus its
+subscription settings. It selects redir-host mixed mode and rule mode, enables
+OpenClash at boot with a 10-second delay, and schedules subscription updates
+daily at 04:00 in the router's configured timezone. The embedded profile is
+available before the first update; it does not depend on a first-boot download.
+Other subscription entries and saved DNS-hijack state are excluded.
+
+The private `GoAsyncFunc/openwrt-actions` repository has a separate
+**R66S private preconfigured firmware** workflow. It consumes the
+`R66S_PERSONAL_OPENCLASH` Actions secret. A separate first job builds the requested
+source incrementally and saves a generic GHCR snapshot without that secret.
+The second job restores the snapshot and rebuilds only the root filesystem/images.
+No personalized state
+is committed or pushed to GHCR. Sensitive build logs are not uploaded. The
+resulting firmware itself contains credentials and must remain private.
+
+The private capture helper downloads the selected subscription afresh and
+tests it with the running router's core before setting the secret. To refresh
+the embedded profile in later firmware, run that helper again; runtime
+subscription updates do not refresh the Actions secret. Generic images and
+GHCR snapshots remain usable without that secret. A fresh install/reset uses
+the personal defaults; preserving settings on upgrade preserves existing
+settings instead. First boot and actual proxy connectivity require hardware
+verification, even after successful configuration and image checks.
+
 ## 32 GB SD storage and zram
 
 The root partition is fixed at 1 GiB (the writable overlay is slightly smaller).
@@ -166,6 +198,39 @@ upgrades must retain this boot/root layout and partition-preservation behavior;
 Back up data independently. Linux loop-device checks cover initialization,
 idempotency/data retention and refusal paths. Hardware first boot, zram and
 Web upgrade/data preservation still require testing on the actual card.
+
+## Docker / Dockerman integration notes (pending)
+
+Recorded on 2026-10-17 for future implementation. Docker and Dockerman are
+not yet bundled; no Docker networking configuration has been applied.
+
+- Keep the existing Firewall4/nftables and OpenClash setup. Review the exact
+  pinned dockerd package and startup script before choosing a firewall backend.
+  Do not assume that selecting the packages alone completes integration.
+- Docker's default iptables backend can set forwarding policy to DROP,
+  affecting the router's LAN-to-WAN forwarding, including IPv6. Check whether
+  `ip-forward-no-drop` is needed and how the installed package accepts it;
+  do not assume an arbitrary UCI option is passed to dockerd.
+- Configure Docker's firewall zone, container NAT and published-port access
+  explicitly. Do not use global forwarding ACCEPT or disable Docker's firewall
+  rules as a blanket workaround. Docker's native nftables backend is currently
+  experimental and requires checking the OpenWrt script's DOCKER-USER handling.
+- Verify bridge-container outbound access/DNS, LAN access to published ports,
+  intended WAN restrictions, and unaffected LAN-to-WAN IPv4/IPv6 forwarding.
+  Repeat after firewall reload, OpenClash restart, WAN reconnect and reboot.
+- For an initial Cloudflare Tunnel container, host networking can reduce
+  bridge/NAT complexity; it does not establish that Docker bridge mode works.
+- Store container data under `/mnt/data/docker`, with a verified data mount
+  and startup guard so a missing mount cannot fill the writable system overlay.
+
+Related reports describe historical failure modes, not proof that the current
+R66S firmware is affected or that all versions are fixed:
+
+- [LEDE #7986: Docker bridge cannot reach the network](https://github.com/coolsnowwolf/lede/issues/7986)
+- [LEDE #11284: container errors after WAN restart](https://github.com/coolsnowwolf/lede/issues/11284)
+- [Docker packet filtering and router forwarding](https://docs.docker.com/engine/network/packet-filtering-firewalls/)
+- [Docker native nftables backend](https://docs.docker.com/engine/network/firewall-nftables/)
+- [OpenWrt dockerd default configuration](https://github.com/openwrt/packages/blob/master/utils/dockerd/files/etc/config/dockerd)
 
 ## Hardware verification
 
