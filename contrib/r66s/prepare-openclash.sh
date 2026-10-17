@@ -61,7 +61,15 @@ mv "$core_dir/clash" "$core_dir/clash_meta"
 chmod 755 "$core_dir/clash_meta"
 # Set the architecture used by OpenClash's future core updates at build time.
 config_file="$source_dir/luci-app-openclash/root/etc/config/openclash"
-sed "s/option core_version '0'/option core_version 'linux-arm64'/" "$config_file" > "$cache/openclash.config"
+sed -e "s/option core_version '0'/option core_version 'linux-arm64'/" \
+    -e "s/option ipv6_enable '0'/option ipv6_enable '1'/" \
+    -e "s/option ipv6_dns '0'/option ipv6_dns '1'/" "$config_file" |
+    awk '/option ipv6_enable / {
+        print
+        print "\toption ipv6_mode \0470\047"
+        print "\toption enable_v6_udp_proxy \0471\047"
+        next
+    } { print }' > "$cache/openclash.config"
 cp "$cache/openclash.config" "$config_file"
 # The upstream package invokes po2lmo but omits its host build dependency.
 makefile="$source_dir/luci-app-openclash/Makefile"

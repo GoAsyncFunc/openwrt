@@ -73,6 +73,8 @@ def prepare(bundle, overlay):
         "enable": "1", "config_path": "/etc/openclash/config/kitty.fo.yaml",
         "en_mode": "redir-host-mix", "operation_mode": "redir-host",
         "proxy_mode": "rule", "auto_update": "1",
+        "ipv6_enable": "1", "ipv6_dns": "1", "ipv6_mode": "0",
+        "enable_v6_udp_proxy": "1", "china_ip6_route": "0",
         "config_auto_update_mode": "0", "config_update_week_time": "*",
         "auto_update_time": "4", "delay_start": "10",
         "redirect_dns": "0", "cachesize_dns": "0", "filter_aaaa_dns": "0",

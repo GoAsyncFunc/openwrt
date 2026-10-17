@@ -106,6 +106,7 @@ jobs:
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
           grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=1024' .config
           grep -qx 'CONFIG_KERNEL_SWAP=y' .config
+          grep -qx 'CONFIG_IPV6=y' .config
           for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -171,6 +172,9 @@ jobs:
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
+          for setting in "ipv6_enable '1'" "ipv6_dns '1'" "ipv6_mode '0'" "enable_v6_udp_proxy '1'"; do
+            grep -Fq "option $setting" "${roots[0]}/etc/config/openclash"
+          done
           test -s "${roots[0]}/etc/openclash/Country.mmdb"
           test -s "${roots[0]}/etc/openclash/GeoSite.dat"
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/openclash.zh-cn.lmo"

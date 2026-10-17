@@ -235,6 +235,65 @@ R66S firmware is affected or that all versions are fixed:
 - [Docker native nftables backend](https://docs.docker.com/engine/network/firewall-nftables/)
 - [OpenWrt dockerd default configuration](https://github.com/openwrt/packages/blob/master/utils/dockerd/files/etc/config/dockerd)
 
+## DNS separation and leak prevention notes (pending)
+
+Recorded on 2026-10-17 at the user's request. This is a design and acceptance
+record for the future dedicated resolver; no additional DNS packages or custom
+DNS firewall rules have been applied. DNS leak prevention has not been verified
+on the device.
+
+The current build now enables OpenClash IPv6 proxying and AAAA resolution by
+default, using IPv6 TProxy mode for TCP and UDP. The private overlay explicitly
+overrides disabled IPv6 settings captured from the existing router and disables
+the IPv6 China-route bypass so the profile's rules decide direct/proxy routing.
+This keeps native IPv6 available instead of disabling LAN IPv6. Generic builds
+still require enabling/configuring OpenClash; private builds retain automatic
+startup. An upgrade preserving an old `/etc/config/openclash` can preserve its
+old disabled IPv6 settings: use the new defaults on a clean flash/reset, or
+explicitly update those settings after a settings-preserving upgrade.
+The live router has not been changed. IPv6 forwarding, proxy-node UDP/IPv6 exit
+support, cold boot and split-tunnel results still need hardware validation;
+these build defaults alone do not establish prevention of all DNS leaks.
+
+- Goal: OpenClash handles proxy selection, traffic routing and the minimal
+  DNS functions needed for domain mapping. A dedicated resolver handles DNS
+  policy, upstream selection, caching and fallback. Keep dnsmasq for DHCP and
+  local names. The proposed resolver is mosdns; AdGuard Home is optional for
+  filtering and per-client logs. SmartDNS is not initially required. Final
+  package selection and topology still need confirmation before implementation.
+- Preserve OpenClash IPv6 interception when introducing the dedicated resolver;
+  coordinate AAAA answers, DHCP/RA DNS advertisement and IPv6 DNS interception
+  instead of allowing IPv6 connections to bypass the intended proxy rules.
+- Evaluate a redir-host mapping/forwarding entry in OpenClash with mosdns as
+  its upstream. Do not assume that bypassing OpenClash DNS entirely preserves
+  domain routing: sniffing cannot recover every connection's hostname. Review
+  the pinned OpenClash DNS interception and generated configuration before
+  fixing ports or adding AdGuard Home to the request path.
+- Define permitted DNS egress explicitly. Direct-domain queries may use
+  approved direct upstreams; proxy-domain queries must use the intended proxy
+  path without silently falling back to the ISP/router DNS. Encrypted DNS
+  alone does not establish that queries leave through the intended exit.
+- Handle bootstrap separately for proxy-node hostnames, resolver hostnames,
+  subscription refresh and time synchronization. Document necessary direct
+  exceptions, avoid circular proxy/DNS dependencies, and decide failure policy
+  explicitly so proxy outages cannot silently expose proxy-domain queries.
+- Cover LAN clients, router-originated requests, and future Docker containers
+  (including embedded DNS forwarding and host/bridge networking). Review both
+  IPv4 and IPv6, DHCP/RA-advertised DNS, hard-coded UDP/TCP port 53 queries,
+  DoT/DoQ and application/browser DoH. Port 53 interception alone cannot
+  prevent arbitrary encrypted DNS bypass; define the supported client policy
+  and its limitations rather than claiming universal leak prevention.
+- Configure one intentional query path without forwarding loops, conflicting
+  DNS interception or duplicated policy ownership. Verify local names and
+  reverse lookups remain available and DNS is not exposed as a WAN resolver.
+- Acceptance requires device-side capture on WAN and relevant proxy/container
+  interfaces, correlated with resolver and OpenClash logs. Check direct and
+  proxy domains, node bootstrap and deliberate client bypass attempts on
+  IPv4/IPv6. Public DNS leak test pages are supplementary evidence only.
+  Repeat on cold boot, WAN reconnect, firewall reload, subscription update,
+  resolver/OpenClash restart, and upstream/proxy failure; verify the chosen
+  failure policy and absence of unintended direct DNS egress.
+
 ## Hardware verification
 
 For the first test, use a spare microSD card and a clean configuration.

@@ -17,6 +17,11 @@ class PersonalOverlayTests(unittest.TestCase):
         bundle = {
             "uci": """config openclash 'config'
  option enable '0'
+ option ipv6_enable '0'
+ option ipv6_dns '0'
+ option ipv6_mode '1'
+ option enable_v6_udp_proxy '0'
+ option china_ip6_route '1'
  option redirect_dns '1'
  option cn_key 'example-dashboard-secret'
 config config_subscribe
@@ -42,6 +47,8 @@ config config_subscribe
             settings = sections[0]
             for key, value in {"enable": "1", "auto_update": "1", "proxy_mode": "rule",
                                "en_mode": "redir-host-mix", "redirect_dns": "0",
+                               "ipv6_enable": "1", "ipv6_dns": "1", "ipv6_mode": "0",
+                               "enable_v6_udp_proxy": "1", "china_ip6_route": "0",
                                "config_update_week_time": "*", "auto_update_time": "4"}.items():
                 self.assertEqual(prepare.option(settings, key), value)
             self.assertNotIn("other.example.test", text)
