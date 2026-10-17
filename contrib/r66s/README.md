@@ -23,7 +23,14 @@ previous DHCP failure has been fixed.
 - Add the runtime board name to network initialization and image metadata.
   Keep the official board ID accepted by the existing profile metadata.
   LAN remains `eth0`, WAN remains `eth1`, with MAC addresses derived from
-  the microSD CID. Physical port order must still be checked on hardware.
+  the microSD CID. Bind their names using OpenWrt's existing preinit device-path
+  mechanism: LAN is `3c0400000.pcie` / `0001:11:00.0`, and WAN is
+  `3c0800000.pcie` / `0002:21:00.0`. Both full sysfs paths were read from the
+  working R66S on 2026-10-17. Preinit handles temporary names before assigning
+  the desired names, including reversed probe ordering. The binding keeps the
+  presently working physical LAN port as LAN; the user confirmed the connected
+  port is labeled LAN on the enclosure, with only that Ethernet link active.
+  Reboot stability of this binding still requires hardware testing.
 - Select the existing official `kmod-r8125-rss` package instead of
   `kmod-r8169`. Its driver source version, RSS/multiple-queue options and
   disabled ASPM already match the LEDE reference.
@@ -295,6 +302,76 @@ these build defaults alone do not establish prevention of all DNS leaks.
   failure policy and absence of unintended direct DNS egress.
 
 ## Hardware verification
+
+### DHCP regression report (2026-10-17, unresolved)
+
+- The user reports no DHCP lease after flashing the private firmware from
+  `GoAsyncFunc/openwrt-actions` run `39025647607`, source commit
+  `af0ef1e5e3e4116866c02436bfa0b5b685dfcffa`. The Mac Ethernet interface
+  self-assigned `169.254.3.20`; no DHCP packet was available through
+  `ipconfig getpacket en0`. Link negotiated at 1000baseT, but IPv4 management
+  at `192.168.77.1` was unreachable.
+- IPv6 multicast discovery received a reply from the link-local address
+  matching the router's previously observed WAN MAC. This suggests checking
+  the physical LAN/WAN path, but does not prove a wiring error. SSH to that
+  link-local address also timed out. Router-side DHCP/service logs and boot
+  status remain unavailable; the cause is unconfirmed.
+- The affected private image includes the kitty.fo profile and automatic
+  OpenClash startup. It does NOT include the later IPv6 interception commit
+  `10ddc07874`; do not attribute this report to that untested change.
+- The first comparison image is the user-selected public firmware from
+  `GoAsyncFunc/openwrt` run `39018039275`, commit
+  `b4c430d13115387c42429158c1280c7a0cdfc278`. Download it first, then compare
+  clean-boot DHCP and management access using the same card, power supply,
+  cabling and physical ports. Record each port's behavior. This is also a
+  public-versus-private configuration comparison, not an isolated source
+  regression test; OpenClash startup/profile differences must be considered.
+- Run `39018039275` was written through the USB reader and its full image
+  extent passed read-back SHA256 verification. The user reports this version
+  also fails to obtain an IP address. This means the private OpenClash overlay
+  is not established as the sole cause. Exact port topology and router boot
+  logs are still unverified.
+- The next user-selected comparison is public run `39003379613`, commit
+  `16bab5d352665d8561df3e6b6841a01647ae83a6`. USB-reader flash and read-back
+  SHA256 passed, but the user again reports no DHCP address.
+- Subsequent capture on Mac `en0` shows repeated DHCP client requests from
+  router MAC `3a:e6:35:f4:44:97` (UDP 68 to broadcast UDP 67), alongside the
+  Mac's own requests, without a server offer in the captured output. This MAC
+  matches the previously observed WAN interface and current IPv6 link-local
+  response. The selected source assigns `eth1` to WAN and `eth0` to LAN.
+  Current evidence therefore points to the computer being connected to the
+  WAN-side broadcast domain. Test the other physical port directly before
+  attributing the symptom to dnsmasq or changing/flashing more firmware.
+  At this stage a LAN-port DHCP test and router-side logs were still pending;
+  the subsequent successful test is recorded below.
+- After switching the computer to the other physical port, live SSH confirmed
+  a DHCP lease `192.168.77.213`, running dnsmasq, LAN on `eth0` / `br-lan`,
+  and WAN on `eth1`. The active LAN PCIe path was
+  `platform/3c0400000.pcie/pci0001:10/0001:10:00.0/0001:11:00.0`, and WAN
+  was `platform/3c0800000.pcie/pci0002:20/0002:20:00.0/0002:21:00.0`.
+  This confirms DHCP works on the LAN side of private run `39025647607`;
+  prior captures do not establish that device numbering actually changed.
+  Source now pins these names to the observed paths to prevent probe-order
+  changes from swapping port roles. Reboot/cold-boot validation is pending.
+- The user clarifies that the cable had remained in the enclosure-labeled
+  LAN port while these failures occurred. Do not describe this as user error:
+  captures identify the software WAN role, not the enclosure label. The
+  desired final binding must match the physical LAN/WAN labels. The user then
+  confirmed that the currently working port is labeled LAN. A fresh SSH read
+  showed only `eth0` had carrier, at the `3c0400000.pcie` path, with DHCP lease
+  `192.168.77.213`. This confirms the proposed path-to-role orientation for
+  the connected physical LAN port. The local binding has not been deployed or
+  committed; random probe-order changes have not yet been reproduced.
+- Timeline correction from the user: after flashing public run `39003379613`,
+  the enclosure LAN port did not provide a lease; following the assistant's
+  advice, the user connected to the enclosure WAN port and obtained a lease.
+  With current private run `39025647607`, the enclosure LAN port now provides
+  a lease, as confirmed by live SSH above. Thus the reported physical roles
+  differ between these tests; do not explain all failures as incorrect cabling.
+  No sysfs snapshot was collected from the working WAN-labeled connection on
+  run `39003379613`, so probe-order reversal remains a hypothesis rather than
+  a proven cause. Pinning roles to the current confirmed physical paths is
+  the intended stabilization, with cold-boot and cross-version tests pending.
 
 For the first test, use a spare microSD card and a clean configuration.
 Keep the working card and its configuration available for recovery. Do not

@@ -172,6 +172,7 @@ jobs:
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
+          cmp target/linux/rockchip/armv8/base-files/etc/board.d/02_network "${roots[0]}/etc/board.d/02_network"
           for setting in "ipv6_enable '1'" "ipv6_dns '1'" "ipv6_mode '0'" "enable_v6_udp_proxy '1'"; do
             grep -Fq "option $setting" "${roots[0]}/etc/config/openclash"
           done
