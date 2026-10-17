@@ -2,6 +2,8 @@
 set -eu
 
 cd "$(dirname "$0")/../.."
+# Pin a reviewed commit from GoAsyncFunc/OpenClash's r66s branch.
+source_repository=GoAsyncFunc/OpenClash
 source_revision=e553e82e01c697aefbe1555261a503f425e00ccd
 core_revision=276ae9d8e7f7d9b9814ae23e015cfe29804b2cbe
 source_sha=bbdbdbc3959ed55270b42d4a5d04fce835684567bfef35a15a472a3ab84ada6c
@@ -28,7 +30,7 @@ fetch() {
 }
 
 mkdir -p "$cache" package/openwrt-packages
-fetch "https://codeload.github.com/vernesong/OpenClash/tar.gz/$source_revision" "$source_archive" "$source_sha"
+fetch "https://codeload.github.com/$source_repository/tar.gz/$source_revision" "$source_archive" "$source_sha"
 fetch "https://raw.githubusercontent.com/vernesong/OpenClash/$core_revision/master/meta/clash-linux-arm64.tar.gz" "$core_archive" "$core_sha"
 tar -xzf "$source_archive" -C "$cache" "OpenClash-$source_revision/luci-app-openclash"
 core_dir="$source_dir/luci-app-openclash/root/etc/openclash/core"
@@ -57,4 +59,4 @@ fi
 file "$core_dir/clash_meta" | grep -q 'ARM aarch64'
 test -s "$source_dir/luci-app-openclash/root/etc/openclash/Country.mmdb"
 test -s "$source_dir/luci-app-openclash/root/etc/openclash/GeoSite.dat"
-printf 'OpenClash source: %s\nARM64 Meta core: %s\n' "$source_revision" "$core_revision"
+printf 'OpenClash source: %s@%s\nARM64 Meta core: %s\n' "$source_repository" "$source_revision" "$core_revision"

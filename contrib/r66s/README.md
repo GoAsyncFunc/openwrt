@@ -99,9 +99,12 @@ nft-tproxy kernel modules. The minimal `dnsmasq` and `ip-tiny` packages are
 disabled to avoid conflicting providers.
 
 Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` (already
-included in Actions). It verifies SHA-256 hashes for the official OpenClash
-source archive and ARM64 Meta core, both pinned to immutable commit IDs in
-the script. Sources and downloads are cached under `dl/r66s-openclash`, and
+included in Actions). It verifies SHA-256 hashes for the OpenClash source
+archive from the `r66s` branch of `GoAsyncFunc/OpenClash` and the upstream
+ARM64 Meta core, both pinned to immutable commit IDs in the script. After
+updating the fork, update `source_revision` and `source_sha` in the script
+to include those changes in firmware builds. Sources and downloads are
+cached under `dl/r66s-openclash`, and
 the generated package is linked under the ignored `package/openwrt-packages`
 directory. No upstream package or feed definitions are replaced.
 
