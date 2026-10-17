@@ -134,9 +134,6 @@ jobs:
           sh -n target/linux/rockchip/armv8/base-files/etc/board.d/02_network
           sh -n target/linux/rockchip/armv8/base-files/etc/hotplug.d/net/40-net-smp-affinity
 
-      - name: Configure R66S private packages
-        run: sh contrib/r66s/prepare-r66s-packages.sh
-
       - name: Download sources
         run: make download -j4 2>&1 | tee logs/download.log
 
