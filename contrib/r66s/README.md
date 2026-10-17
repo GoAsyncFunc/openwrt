@@ -139,8 +139,11 @@ configured. Personal subscription URLs and node credentials must never be
 committed here or injected into this public workflow.
 
 `prepare-personal-openclash.py` accepts a private JSON bundle on stdin and
-generates a build overlay with a complete, downloaded `GPT.yaml` plus its
-subscription settings. It selects redir-host mixed mode and rule mode, enables
+generates a build overlay with a complete, downloaded `kitty.fo.yaml` plus its
+subscription settings. Downloads and automatic updates use User-Agent
+`clash-verge/v2.4.5`. The downloaded YAML is preserved verbatim to avoid
+changing credential/Reality scalar values during serialization.
+It selects redir-host mixed mode and rule mode, enables
 OpenClash at boot with a 10-second delay, and schedules subscription updates
 daily at 04:00 in the router's configured timezone. The embedded profile is
 available before the first update; it does not depend on a first-boot download.

@@ -56,20 +56,11 @@ def prepare(bundle, overlay):
         for key in ("proxies", "proxy-groups", "rules")
     ) or profile.get("proxy-providers"):
         raise ValueError("A complete, self-contained Clash profile is required")
-    profile["mode"] = "rule"
-    selections = bundle.get("selections", {})
-    for group in profile["proxy-groups"]:
-        selected = selections.get(group.get("name"))
-        choices = group.get("proxies", [])
-        if group.get("type") == "select" and selected in choices:
-            choices.remove(selected)
-            choices.insert(0, selected)
-    profile.setdefault("profile", {})["store-selected"] = True
     sections = parse_uci(bundle["uci"])
     global_config = next(s for s in sections if s[:2] == ["openclash", "config"])
     subscription = next(
         s for s in sections
-        if s[0] == "config_subscribe" and option(s, "name") == "GPT"
+        if s[0] == "config_subscribe" and option(s, "name") == "kitty.fo"
     )
     if not (option(subscription, "address") or "").startswith("https://"):
         raise ValueError("Missing HTTPS subscription")
@@ -79,7 +70,7 @@ def prepare(bundle, overlay):
     sections = [s for s in sections if s[0] in ("openclash", "dns_servers", "authentication")]
     sections.append(subscription)
     for key, value in {
-        "enable": "1", "config_path": "/etc/openclash/config/GPT.yaml",
+        "enable": "1", "config_path": "/etc/openclash/config/kitty.fo.yaml",
         "en_mode": "redir-host-mix", "operation_mode": "redir-host",
         "proxy_mode": "rule", "auto_update": "1",
         "config_auto_update_mode": "0", "config_update_week_time": "*",
@@ -89,6 +80,7 @@ def prepare(bundle, overlay):
     }.items():
         set_option(global_config, key, value)
     set_option(subscription, "enabled", "1")
+    set_option(subscription, "sub_ua", "clash-verge/v2.4.5")
     lines = []
     for kind, name, rows in sections:
         lines.append("config " + shlex.quote(kind) + (" " + shlex.quote(name) if name else ""))
@@ -96,8 +88,9 @@ def prepare(bundle, overlay):
                      for command, key, value in rows)
         lines.append("")
     write_private(overlay / "etc/config/openclash", "\n".join(lines))
-    write_private(overlay / "etc/openclash/config/GPT.yaml",
-                  yaml.safe_dump(profile, allow_unicode=True, sort_keys=False))
+    # Preserve the provider's scalar spelling (notably Reality identifiers).
+    # OpenClash applies rule/mixed mode from UCI when producing its runtime YAML.
+    write_private(overlay / "etc/openclash/config/kitty.fo.yaml", bundle["profile"])
     write_private(overlay / "etc/uci-defaults/98-r66s-personal-openclash",
                   "#!/bin/sh\n/etc/init.d/cron enable\n/etc/init.d/openclash enable\nexit 0\n",
                   0o700)
