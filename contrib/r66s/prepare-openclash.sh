@@ -2,16 +2,16 @@
 set -eu
 
 cd "$(dirname "$0")/../.."
-# Pin a reviewed commit from GoAsyncFunc/OpenClash's r66s branch.
-source_repository=GoAsyncFunc/OpenClash
-source_revision=83d0e88d8d845802a4b31e6166adc9cb8530a48e
+# Pin a reviewed commit from the OpenClash package inside r66s-packages.
+source_repository=GoAsyncFunc/r66s-packages
+source_revision=dd3ce7327bb7a969089881c0496f32c6025ae1c4
 core_revision=276ae9d8e7f7d9b9814ae23e015cfe29804b2cbe
-source_tar_sha=70a2e46742b60c0710d42d24404b3f1dc26cee19f64a3b27993a8e5050d1e22b
+source_tar_sha=c2cae489f13f3cd1521676d86a9c2a14c2f59da85eb7e14a6345cc34f011e122
 core_sha=aae510c46001b8784b1480be94c3c740db9b387e5419604abaafa4189cd99c6d
 cache=dl/r66s-openclash
 source_archive="$cache/source-$source_revision.tar.gz"
 core_archive="$cache/core-$core_revision-arm64.tar.gz"
-source_dir="$cache/OpenClash-$source_revision"
+source_dir="$cache/OpenClash-$source_revision/openclash"
 package_dir=package/openwrt-packages/luci-app-openclash
 
 fetch() {
@@ -37,7 +37,7 @@ if [ ! -f "$source_archive" ]; then
 	trap 'rm -rf "$source_checkout"' EXIT
 	git init -q "$source_checkout"
 	git -C "$source_checkout" fetch --depth=1 "git@github.com:$source_repository.git" "$source_revision"
-	git -C "$source_checkout" -c tar.umask=0002 archive --format=tar --prefix="OpenClash-$source_revision/" FETCH_HEAD luci-app-openclash > "$source_checkout/source.tar"
+	git -C "$source_checkout" -c tar.umask=0002 archive --format=tar --prefix="OpenClash-$source_revision/" FETCH_HEAD openclash/luci-app-openclash > "$source_checkout/source.tar"
 	gzip -n -c "$source_checkout/source.tar" > "$source_archive.part"
 	mv "$source_archive.part" "$source_archive"
 fi
@@ -53,7 +53,7 @@ if [ "${1:-}" = --source-only ]; then
 	exit 0
 fi
 fetch "https://raw.githubusercontent.com/vernesong/OpenClash/$core_revision/master/meta/clash-linux-arm64.tar.gz" "$core_archive" "$core_sha"
-tar -xzf "$source_archive" -C "$cache" "OpenClash-$source_revision/luci-app-openclash"
+tar -xzf "$source_archive" -C "$cache" "OpenClash-$source_revision/openclash/luci-app-openclash"
 core_dir="$source_dir/luci-app-openclash/root/etc/openclash/core"
 mkdir -p "$core_dir"
 tar -xzf "$core_archive" -C "$core_dir" clash

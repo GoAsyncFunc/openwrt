@@ -107,7 +107,7 @@ disabled to avoid conflicting providers.
 
 Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` (already
 included in Actions). It verifies SHA-256 hashes for the OpenClash source
-archive from the `r66s` branch of `GoAsyncFunc/OpenClash` and the upstream
+archive from the pinned `main` commit of `GoAsyncFunc/r66s-packages` and the upstream
 ARM64 Meta core, both pinned to immutable commit IDs in the script. After
 updating the fork, update `source_revision` and `source_tar_sha` in the script
 to include those changes in firmware builds. Sources and downloads are
@@ -115,13 +115,13 @@ cached under `dl/r66s-openclash`, and
 the generated package is linked under the ignored `package/openwrt-packages`
 directory. No upstream package or feed definitions are replaced.
 
-`GoAsyncFunc/OpenClash` is an independent private source snapshot. On cache
+`GoAsyncFunc/r66s-packages` is an independent private source snapshot. On cache
 miss, the preparation script fetches only the pinned commit over SSH and
-creates an archive of `luci-app-openclash` with `git -c tar.umask=0002 archive`
+creates an archive of `openclash/luci-app-openclash` with `git -c tar.umask=0002 archive`
 and `gzip -n`. Because gzip output varies across platforms, `source_tar_sha`
 checks the uncompressed tar payload; gzip integrity is checked separately.
 Compute it with `git -c tar.umask=0002 archive --format=tar
---prefix=OpenClash-<full commit SHA>/ <full commit SHA> luci-app-openclash
+--prefix=OpenClash-<full commit SHA>/ <full commit SHA> openclash/luci-app-openclash
 | shasum -a 256`. Actions uses the `OPENCLASH_READ_KEY` secret,
 a read-only deploy key scoped to that repository; local builds need SSH
 access too. `--source-only` downloads and verifies just this archive for
@@ -209,10 +209,23 @@ Back up data independently. Linux loop-device checks cover initialization,
 idempotency/data retention and refusal paths. Hardware first boot, zram and
 Web upgrade/data preservation still require testing on the actual card.
 
-## Docker / Dockerman integration notes (pending)
+## Docker / Dockerman integration
 
-Recorded on 2026-10-17 for future implementation. Docker and Dockerman are
-not yet bundled; no Docker networking configuration has been applied.
+The R66S profile bundles `dockerd`, the Docker CLI, `luci-app-dockerman`,
+`ttyd` and the kernel networking modules required by Docker. Dockerman is
+pinned in `feeds.conf.default` so an incremental build does not silently move
+to a different UI revision.
+
+On the first boot with a verified 32 GB data partition, the storage initializer
+creates `/mnt/data/docker`, sets Docker's `data_root` there, enables the daemon
+and starts it. If the data partition is missing, unrecognized or mounted at a
+different path, Docker is not enabled; this prevents the 1 GiB system overlay
+from being consumed by container layers. Existing Firewall4 and OpenClash
+settings are kept unchanged until Docker networking is tested on hardware.
+
+The initial acceptance test must cover image pulls, bridge-container DNS and
+outbound access, LAN access to published ports, WAN restrictions, IPv4/IPv6
+forwarding, firewall reload, OpenClash restart, WAN reconnect and reboot.
 
 - Keep the existing Firewall4/nftables and OpenClash setup. Review the exact
   pinned dockerd package and startup script before choosing a firewall backend.
