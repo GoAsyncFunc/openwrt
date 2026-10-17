@@ -4,9 +4,9 @@ set -eu
 cd "$(dirname "$0")/../.."
 # Pin a reviewed commit from GoAsyncFunc/OpenClash's r66s branch.
 source_repository=GoAsyncFunc/OpenClash
-source_revision=afa7aaadcb295100a2ef6790f5a2cbb1c36ab251
+source_revision=29ff198964557ece57a758b36c6df6bf5efa1a20
 core_revision=276ae9d8e7f7d9b9814ae23e015cfe29804b2cbe
-source_tar_sha=73db92c60f7768a8a1aaeea354b14bdea976defaf8e2a52961b36d42a7c749f0
+source_tar_sha=f78b06f3ac893142e35b8e5cd5f56245a2df973b82338bb1e42101519647f8da
 core_sha=aae510c46001b8784b1480be94c3c740db9b387e5419604abaafa4189cd99c6d
 cache=dl/r66s-openclash
 source_archive="$cache/source-$source_revision.tar.gz"
