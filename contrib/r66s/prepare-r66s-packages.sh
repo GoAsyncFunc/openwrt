@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/../.."
 source_repository=GoAsyncFunc/r66s-packages
 source_revision=1fc15f3724fa287e3bb883a973daddc3df4a972a
-source_tar_sha=a1fb6cff50503ac786ac9115e667ad999f1f2847f46bb3a9bb7bc6100ee4d517
+source_tar_sha=a4f82b12059997442c0605c04f6203c1093ef1d877ed15e624ed51d1d89f0f2b
 cache=dl/r66s-packages
 source_archive="$cache/source-$source_revision.tar.gz"
 source_dir="$cache/R66SPackages-$source_revision"
