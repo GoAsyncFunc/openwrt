@@ -25,6 +25,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  openclash-source-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.OPENCLASH_READ_KEY }}
+      - name: Verify private OpenClash source access and archive checksum
+        run: sh contrib/r66s/prepare-openclash.sh --source-only
+
   storage-checks:
     runs-on: ubuntu-24.04
     steps:
@@ -38,7 +50,7 @@ jobs:
           sudo bash contrib/r66s/test-storage.sh
 
   build:
-    needs: storage-checks
+    needs: [storage-checks, openclash-source-checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     defaults:
@@ -62,10 +74,17 @@ jobs:
           mkdir -p logs
           df -h .
 
+      - name: Authorize read-only OpenClash source access
+        uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.OPENCLASH_READ_KEY }}
+
       - name: Restore downloaded sources
         uses: actions/cache@v4
         with:
-          path: dl
+          path: |
+            dl
+            !dl/r66s-openclash
           key: r66s-dl-${{ runner.os }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default', 'contrib/r66s/prepare-openclash.sh') }}
           restore-keys: |
             r66s-dl-${{ runner.os }}-

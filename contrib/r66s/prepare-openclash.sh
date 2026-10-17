@@ -4,9 +4,9 @@ set -eu
 cd "$(dirname "$0")/../.."
 # Pin a reviewed commit from GoAsyncFunc/OpenClash's r66s branch.
 source_repository=GoAsyncFunc/OpenClash
-source_revision=e553e82e01c697aefbe1555261a503f425e00ccd
+source_revision=47e39ab46fec8599e90c977c4709411fc395659e
 core_revision=276ae9d8e7f7d9b9814ae23e015cfe29804b2cbe
-source_sha=bbdbdbc3959ed55270b42d4a5d04fce835684567bfef35a15a472a3ab84ada6c
+source_sha=b1b380e2cf34a80b76a19a7fefb6fab44c0f4409171be7aa616b87eb3efe56f6
 core_sha=aae510c46001b8784b1480be94c3c740db9b387e5419604abaafa4189cd99c6d
 cache=dl/r66s-openclash
 source_archive="$cache/source-$source_revision.tar.gz"
@@ -30,7 +30,22 @@ fetch() {
 }
 
 mkdir -p "$cache" package/openwrt-packages
-fetch "https://codeload.github.com/$source_repository/tar.gz/$source_revision" "$source_archive" "$source_sha"
+if [ ! -f "$source_archive" ]; then
+	GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-"ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts"}
+	export GIT_SSH_COMMAND
+	source_checkout=$(mktemp -d "${TMPDIR:-/tmp}/r66s-openclash-source.XXXXXX")
+	trap 'rm -rf "$source_checkout"' EXIT
+	git init -q "$source_checkout"
+	git -C "$source_checkout" fetch --depth=1 "git@github.com:$source_repository.git" "$source_revision"
+	git -C "$source_checkout" archive --format=tar --prefix="OpenClash-$source_revision/" FETCH_HEAD luci-app-openclash > "$source_checkout/source.tar"
+	gzip -n -c "$source_checkout/source.tar" > "$source_archive.part"
+	mv "$source_archive.part" "$source_archive"
+fi
+# Check the deterministic git archive even when restored from a build cache.
+fetch '' "$source_archive" "$source_sha"
+if [ "${1:-}" = --source-only ]; then
+	exit 0
+fi
 fetch "https://raw.githubusercontent.com/vernesong/OpenClash/$core_revision/master/meta/clash-linux-arm64.tar.gz" "$core_archive" "$core_sha"
 tar -xzf "$source_archive" -C "$cache" "OpenClash-$source_revision/luci-app-openclash"
 core_dir="$source_dir/luci-app-openclash/root/etc/openclash/core"
@@ -52,7 +67,11 @@ cp "$cache/openclash.Makefile" "$makefile"
 package_source="$PWD/$source_dir/luci-app-openclash"
 if [ -e "$package_dir" ] || [ -L "$package_dir" ]; then
 	test -L "$package_dir"
-	test "$(readlink "$package_dir")" = "$package_source"
+	case "$(readlink "$package_dir")" in
+		"$PWD/$cache/"OpenClash-*/luci-app-openclash) ;;
+		*) echo "Unexpected OpenClash package link: $package_dir" >&2; exit 1 ;;
+	esac
+	ln -sfn "$package_source" "$package_dir"
 else
 	ln -s "$package_source" "$package_dir"
 fi

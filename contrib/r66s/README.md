@@ -108,6 +108,15 @@ cached under `dl/r66s-openclash`, and
 the generated package is linked under the ignored `package/openwrt-packages`
 directory. No upstream package or feed definitions are replaced.
 
+`GoAsyncFunc/OpenClash` is an independent private source snapshot. On cache
+miss, the preparation script fetches only the pinned commit over SSH and
+creates a deterministic archive of `luci-app-openclash` with `git archive`
+and `gzip -n`. Compute `source_sha` with the same archive prefix
+`OpenClash-<full commit SHA>/`. Actions uses the `OPENCLASH_READ_KEY` secret,
+a read-only deploy key scoped to that repository; local builds need SSH
+access too. `--source-only` downloads and verifies just this archive for
+prefetching on the host before a Docker build. Credentials are never bundled.
+
 The core is installed at `/etc/openclash/core/clash_meta`. Country.mmdb,
 GeoSite.dat, dashboards and editor assets come from the pinned OpenClash
 source. The preparation step sets the core update architecture to
