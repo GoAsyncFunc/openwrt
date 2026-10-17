@@ -102,7 +102,7 @@ Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` (already
 included in Actions). It verifies SHA-256 hashes for the OpenClash source
 archive from the `r66s` branch of `GoAsyncFunc/OpenClash` and the upstream
 ARM64 Meta core, both pinned to immutable commit IDs in the script. After
-updating the fork, update `source_revision` and `source_sha` in the script
+updating the fork, update `source_revision` and `source_tar_sha` in the script
 to include those changes in firmware builds. Sources and downloads are
 cached under `dl/r66s-openclash`, and
 the generated package is linked under the ignored `package/openwrt-packages`
@@ -110,9 +110,12 @@ directory. No upstream package or feed definitions are replaced.
 
 `GoAsyncFunc/OpenClash` is an independent private source snapshot. On cache
 miss, the preparation script fetches only the pinned commit over SSH and
-creates a deterministic archive of `luci-app-openclash` with `git archive`
-and `gzip -n`. Compute `source_sha` with the same archive prefix
-`OpenClash-<full commit SHA>/`. Actions uses the `OPENCLASH_READ_KEY` secret,
+creates an archive of `luci-app-openclash` with `git -c tar.umask=0002 archive`
+and `gzip -n`. Because gzip output varies across platforms, `source_tar_sha`
+checks the uncompressed tar payload; gzip integrity is checked separately.
+Compute it with `git -c tar.umask=0002 archive --format=tar
+--prefix=OpenClash-<full commit SHA>/ <full commit SHA> luci-app-openclash
+| shasum -a 256`. Actions uses the `OPENCLASH_READ_KEY` secret,
 a read-only deploy key scoped to that repository; local builds need SSH
 access too. `--source-only` downloads and verifies just this archive for
 prefetching on the host before a Docker build. Credentials are never bundled.

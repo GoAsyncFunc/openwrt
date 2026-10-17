@@ -6,7 +6,7 @@ cd "$(dirname "$0")/../.."
 source_repository=GoAsyncFunc/OpenClash
 source_revision=47e39ab46fec8599e90c977c4709411fc395659e
 core_revision=276ae9d8e7f7d9b9814ae23e015cfe29804b2cbe
-source_sha=b1b380e2cf34a80b76a19a7fefb6fab44c0f4409171be7aa616b87eb3efe56f6
+source_tar_sha=a6f6f3faa72a11295acb00cad88847f36fb24cc72d8102f7e0c46c472ad1c026
 core_sha=aae510c46001b8784b1480be94c3c740db9b387e5419604abaafa4189cd99c6d
 cache=dl/r66s-openclash
 source_archive="$cache/source-$source_revision.tar.gz"
@@ -37,12 +37,18 @@ if [ ! -f "$source_archive" ]; then
 	trap 'rm -rf "$source_checkout"' EXIT
 	git init -q "$source_checkout"
 	git -C "$source_checkout" fetch --depth=1 "git@github.com:$source_repository.git" "$source_revision"
-	git -C "$source_checkout" archive --format=tar --prefix="OpenClash-$source_revision/" FETCH_HEAD luci-app-openclash > "$source_checkout/source.tar"
+	git -C "$source_checkout" -c tar.umask=0002 archive --format=tar --prefix="OpenClash-$source_revision/" FETCH_HEAD luci-app-openclash > "$source_checkout/source.tar"
 	gzip -n -c "$source_checkout/source.tar" > "$source_archive.part"
 	mv "$source_archive.part" "$source_archive"
 fi
-# Check the deterministic git archive even when restored from a build cache.
-fetch '' "$source_archive" "$source_sha"
+# gzip output differs between macOS and Linux, even with -n. Verify the
+# deterministic tar payload, and check gzip integrity separately.
+gzip -t "$source_archive"
+actual=$(gzip -dc "$source_archive" | shasum -a 256 | awk '{print $1}')
+[ "$actual" = "$source_tar_sha" ] || {
+	echo "Source tar checksum mismatch: $source_archive (expected $source_tar_sha, got $actual)" >&2
+	exit 1
+}
 if [ "${1:-}" = --source-only ]; then
 	exit 0
 fi
