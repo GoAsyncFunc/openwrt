@@ -39,8 +39,9 @@ tar -xzf "$source_archive" -C "$cache" \
 	"R66SPackages-$source_revision/patches"
 if [ -e "$package_dir" ] || [ -L "$package_dir" ]; then
 	test -L "$package_dir"
-	case "$(readlink "$package_dir")" in
-		"$PWD/$source_dir/packages/r66s-docker") ;;
+	link_target=$(readlink -f "$package_dir")
+	case "$link_target" in
+		"$PWD/$cache/"R66SPackages-*/packages/r66s-docker) ;;
 		*) echo "Unexpected R66S package link: $package_dir" >&2; exit 1 ;;
 	esac
 	ln -sfn "$PWD/$source_dir/packages/r66s-docker" "$package_dir"

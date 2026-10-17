@@ -81,7 +81,8 @@ cp "$cache/openclash.Makefile" "$makefile"
 package_source="$PWD/$source_dir/luci-app-openclash"
 if [ -e "$package_dir" ] || [ -L "$package_dir" ]; then
 	test -L "$package_dir"
-	case "$(readlink "$package_dir")" in
+	link_target=$(readlink -f "$package_dir")
+	case "$link_target" in
 		"$PWD/$cache/"OpenClash-*/openclash/luci-app-openclash) ;;
 		*) echo "Unexpected OpenClash package link: $package_dir" >&2; exit 1 ;;
 	esac
