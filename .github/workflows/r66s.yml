@@ -25,7 +25,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  storage-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test storage initialization on disposable loop devices
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends util-linux fdisk e2fsprogs
+          sudo bash contrib/r66s/test-storage.sh
+
   build:
+    needs: storage-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     defaults:
@@ -72,6 +85,12 @@ jobs:
           grep -qx 'CONFIG_PACKAGE_kmod-r8125-rss=y' .config
           grep -qx 'CONFIG_PACKAGE_luci=y' .config
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=1024' .config
+          grep -qx 'CONFIG_KERNEL_SWAP=y' .config
+          for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config
+          done
+          sh -n files/usr/sbin/r66s-data-setup
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
@@ -117,6 +136,9 @@ jobs:
           gzip -t "$payload"
           manifest="${image%-squashfs-sysupgrade.img.gz}.manifest"
           grep -q '^kmod-r8125-rss ' "$manifest"
+          for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
+            grep -q "^${package} " "$manifest"
+          done
           for package in base firewall package-manager; do
             grep -q "^luci-i18n-${package}-zh-cn " "$manifest"
           done
@@ -135,6 +157,22 @@ jobs:
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/openclash.zh-cn.lmo"
           file "${roots[0]}/etc/openclash/core/clash_meta" | grep -q 'ARM aarch64'
           grep -Fq 'lan) ipad=${ipaddr:-"192.168.77.1"}' "${roots[0]}/bin/config_generate"
+          grep -Fq "set system.@system[-1].zram_size_mb='512'" "${roots[0]}/bin/config_generate"
+          test -x "${roots[0]}/etc/init.d/zram"
+          test -x "${roots[0]}/usr/sbin/r66s-data-setup"
+          cmp contrib/r66s/r66s-data-setup "${roots[0]}/usr/sbin/r66s-data-setup"
+          test -x "${roots[0]}/etc/uci-defaults/95-r66s-storage"
+          # Check the actual compressed image's MBR, not just .config.
+          python3 - "$payload" <<'PY'
+          import gzip, struct, sys
+          with gzip.open(sys.argv[1], 'rb') as f:
+              mbr = f.read(512)
+          assert mbr[510:512] == b'\x55\xaa'
+          parts = [struct.unpack_from('<B3sB3sII', mbr, 446 + i * 16) for i in range(4)]
+          assert parts[0][4:] == (65536, 65536), parts
+          assert parts[1][4:] == (196608, 2097152), parts
+          assert parts[2][5] == parts[3][5] == 0, parts
+          PY
           if grep -Eq '^kmod-(r8169|r8125) ' "$manifest"; then
             echo 'Unexpected competing Realtek driver in image manifest' >&2
             exit 1

@@ -1,0 +1,141 @@
+#!/bin/sh
+# Initialize only the unused tail of this R66S's 32 GB boot SD card.
+# An interrupted initialization never authorizes formatting an existing partition.
+
+r66s_data_fail() {
+    echo "r66s-data: $*" >&2
+    return 1
+}
+
+r66s_data_info() {
+    block info "$1" 2>/dev/null
+}
+
+r66s_data_field() {
+    r66s_data_info "$1" | sed -n "s/.* $2=\"\([^\"]*\)\".*/\1/p"
+}
+
+r66s_data_remove_duplicate() {
+    local section="$1" uuid
+    config_get uuid "$section" uuid
+    if [ "$uuid" = "$R66S_DATA_UUID" ] && [ "$section" != r66s_data ]; then
+        # 10-fstab/block detect can create a disabled entry for an existing
+        # volume after factory reset. Do not leave duplicate UUID entries.
+        uci -q delete "fstab.$section"
+    fi
+    return 0
+}
+
+r66s_data_prepare() {
+    local disk="$1" name="${1##*/}" prefix layout count label start size end
+    local new_start total part p1_before p2_before i
+    case "$name" in *[0-9]) prefix="${name}p" ;; *) prefix="$name" ;; esac
+    part="/dev/${prefix}3"
+    total=$(cat "/sys/class/block/$name/size") || return 1
+    # Scope this automatic initializer to nominal 32 GB media.
+    [ "$total" -ge 58000000 ] && [ "$total" -le 65000000 ] || {
+        r66s_data_fail 'Boot card is not the expected 32 GB size.'; return 1;
+    }
+    layout=$(sfdisk --dump "$disk") || return 1
+    label=$(printf '%s\n' "$layout" | sed -n 's/^label: //p')
+    count=$(printf '%s\n' "$layout" | awk '/^\/dev\// { n++ } END { print n+0 }')
+    [ "$label" = dos ] && { [ "$count" -eq 2 ] || [ "$count" -eq 3 ]; } || {
+        r66s_data_fail 'Unexpected partition table; leaving it untouched.'; return 1;
+    }
+    [ -b "/dev/${prefix}1" ] && [ -b "/dev/${prefix}2" ] || return 1
+    start=$(cat "/sys/class/block/${prefix}2/start") || return 1
+    size=$(cat "/sys/class/block/${prefix}2/size") || return 1
+    [ "$start" -eq 196608 ] && [ "$size" -eq 2097152 ] &&
+        [ "$(cat "/sys/class/block/${prefix}1/start")" -eq 65536 ] &&
+        [ "$(cat "/sys/class/block/${prefix}1/size")" -eq 65536 ] || {
+        r66s_data_fail 'Expected the fixed 32 MiB boot / 1 GiB root layout.'; return 1;
+    }
+    end=$((start + size))
+    new_start=$(((end + 2047) / 2048 * 2048))
+    if [ "$count" -eq 2 ]; then
+        [ ! -e "$part" ] || return 1
+        p1_before=$(printf '%s\n' "$layout" | grep -F "/dev/${prefix}1 ")
+        p2_before=$(printf '%s\n' "$layout" | grep -F "/dev/${prefix}2 ")
+        printf '%s\n' "$layout" > /root/r66s-partitions.before
+        # Append one partition only. Do not reread/remove the mounted system
+        # partitions; register just the new third partition with the kernel.
+        printf 'start=%s, type=83\n' "$new_start" |
+            sfdisk --append --no-reread --no-tell-kernel "$disk" >&2 || return 1
+        layout=$(sfdisk --dump "$disk") || return 1
+        printf '%s\n' "$layout" | grep -Fxq "$p1_before" || return 1
+        printf '%s\n' "$layout" | grep -Fxq "$p2_before" || return 1
+        if [ ! -b "$part" ]; then
+            # Hotplug may have registered it already, or race this command.
+            # Accept only the verified device geometry below, not its exit code.
+            partx --add --nr 3 "$disk" || :
+        fi
+        i=0
+        while [ ! -b "$part" ] && [ "$i" -lt 5 ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+        [ -b "$part" ] || return 1
+        [ "$(cat "/sys/class/block/${prefix}3/start")" -eq "$new_start" ] &&
+            [ "$(cat "/sys/class/block/${prefix}3/size")" -eq "$((total - new_start))" ] || return 1
+        # Even a newly added partition can expose an old filesystem signature.
+        # Never overwrite one automatically, and never force mkfs.
+        [ -z "$(r66s_data_field "$part" TYPE)" ] || {
+            r66s_data_fail 'A filesystem signature exists in the new partition; manual review required.'; return 1;
+        }
+        mkfs.ext4 -L r66s-data -m 0 "$part" >&2 || return 1
+    fi
+    [ -b "$part" ] || return 1
+    [ "$(cat "/sys/class/block/${prefix}3/start")" -eq "$new_start" ] || return 1
+    [ "$(r66s_data_field "$part" TYPE)" = ext4 ] &&
+        [ "$(r66s_data_field "$part" LABEL)" = r66s-data ] || {
+        r66s_data_fail 'Existing third partition is not r66s-data/ext4; refusing to format it.'; return 1;
+    }
+    R66S_DATA_UUID=$(r66s_data_field "$part" UUID)
+    [ -n "$R66S_DATA_UUID" ]
+}
+
+r66s_data_main() {
+    local disk existing_uuid mounted
+    case "$(cat /tmp/sysinfo/board_name)" in
+        fastrhino,r66s|lunzn,fastrhino-r66s) ;;
+        *) r66s_data_fail 'Wrong board.'; return 1 ;;
+    esac
+    # Configure zram independently: a data-partition error must not disable it.
+    if [ "$(uci -q get 'system.@system[0].zram_size_mb')" != 512 ]; then
+        uci set 'system.@system[0].zram_size_mb=512' || return 1
+        uci commit system || return 1
+        /etc/init.d/zram restart || return 1
+    fi
+    /etc/init.d/zram enable || return 1
+    . /lib/functions.sh
+    . /lib/upgrade/common.sh
+    export_bootdevice && export_partdevice disk 0 || return 1
+    case "$disk" in mmcblk[0-9]) ;; *) return 1 ;; esac
+    [ "$(cat "/sys/class/block/$disk/device/type")" = SD ] || return 1
+    r66s_data_prepare "/dev/$disk" || return 1
+    mounted=$(r66s_data_field "/dev/${disk}p3" MOUNT)
+    [ -z "$mounted" ] || [ "$mounted" = /mnt/data ] || {
+        r66s_data_fail 'Data volume is already mounted elsewhere.'; return 1;
+    }
+    existing_uuid=$(uci -q get fstab.r66s_data.uuid)
+    [ -z "$existing_uuid" ] || [ "$existing_uuid" = "$R66S_DATA_UUID" ] || return 1
+    config_load fstab
+    config_foreach r66s_data_remove_duplicate mount
+    mkdir -p /mnt/data
+    uci -q batch <<-EOF
+	set fstab.r66s_data=mount
+	set fstab.r66s_data.uuid='$R66S_DATA_UUID'
+	set fstab.r66s_data.target='/mnt/data'
+	set fstab.r66s_data.fstype='ext4'
+	set fstab.r66s_data.options='rw,noatime'
+	set fstab.r66s_data.enabled='1'
+	commit fstab
+EOF
+    block mount || return 1
+    [ "$(r66s_data_field "/dev/${disk}p3" MOUNT)" = /mnt/data ]
+}
+
+# Functions can be sourced by the Linux loop-device integration tests.
+if [ "${0##*/}" = r66s-data-setup ]; then
+    r66s_data_main "$@"
+fi

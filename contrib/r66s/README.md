@@ -64,7 +64,7 @@ a full `make -j2 V=s` firmware build. No local Docker environment is required.
 Downloaded sources are cached; feed revisions and the full resolved
 configuration are saved with the build artifacts.
 
-The configuration enables LuCI and ethtool, with a 512 MiB SquashFS root
+The configuration enables LuCI and ethtool, with a 1024 MiB SquashFS root
 partition. Simplified Chinese translations are included for the LuCI base
 interface, firewall and package manager. LuCI keeps its upstream automatic
 language selection; Chinese can also be selected in System > System >
@@ -116,6 +116,41 @@ providers or datasets requested by a user's configuration may still need
 network access. Actions checks package selection, the firmware manifest,
 core architecture, bundled datasets and the baked-in LAN address.
 Compilation does not verify proxy connectivity or routing on hardware.
+
+## 32 GB SD storage and zram
+
+The root partition is fixed at 1 GiB (the writable overlay is slightly smaller).
+`zram-swap` and its kernel/BusyBox dependencies are bundled. The build-generated
+system defaults set `zram_size_mb=512`; the upstream zram service uses LZO and
+priority 100. This is compressed RAM swap, not SD-backed swap, and reserves no
+512 MiB SD partition. Physical RAM use grows with the compressed pages stored.
+
+`prepare-defaults.sh` also installs the R66S-only data initializer through the
+build overlay. At first boot it verifies the boot device is nominal 32 GB SD
+media, has a DOS table and the expected fixed boot/root offsets and sizes.
+It appends partition 3 using the unused tail, formats it as ext4 with label
+`r66s-data`, and configures UUID-based mounting at `/mnt/data` using block-mount.
+It saves the original table to `/root/r66s-partitions.before`. No system
+partition is moved or resized. Unexpected tables, other card capacities and
+unknown existing filesystems are rejected. Existing partition 3 is never
+formatted: only an ext4 partition labeled `r66s-data` at the expected offset
+is reused. If power fails after creating the partition but before formatting,
+the next boot refuses to format it automatically; inspect/recover it manually.
+
+The initializer is retried after failed setup and is removed from uci-defaults
+after success. On subsequent firmware upgrades/reset, the bundled initializer
+can restore the data mount without formatting the recognized data partition.
+It also enforces 512 MiB zram when settings from an older firmware are retained.
+No Docker/Podman engine is installed by this storage change. Container data
+can later be configured under `/mnt/data`, after checking the mount succeeded.
+
+Back up and reflash the SD card once to migrate from the old 512 MiB root
+layout. Do not expect the first Web upgrade to perform that migration. Future
+upgrades must retain this boot/root layout and partition-preservation behavior;
+`sysupgrade -p` or writing a whole-card image can destroy the data partition.
+Back up data independently. Linux loop-device checks cover initialization,
+idempotency/data retention and refusal paths. Hardware first boot, zram and
+Web upgrade/data preservation still require testing on the actual card.
 
 ## Hardware verification
 
