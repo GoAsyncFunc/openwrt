@@ -3,8 +3,8 @@ set -eu
 
 cd "$(dirname "$0")/../.."
 source_repository=GoAsyncFunc/r66s-packages
-source_revision=1fc15f3724fa287e3bb883a973daddc3df4a972a
-source_tar_sha=a4f82b12059997442c0605c04f6203c1093ef1d877ed15e624ed51d1d89f0f2b
+source_revision=5b2bffdf1f1677c963dc00bb2c66ea456324766e
+source_tar_sha=24b84192f0f42bfa84f5cd093b5308912ea783e8f8a0a715090ae18cec19c069
 cache=dl/r66s-packages
 source_archive="$cache/source-$source_revision.tar.gz"
 source_dir="$cache/R66SPackages-$source_revision"
