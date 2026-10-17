@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
-          ssh-private-key: ${{ secrets.OPENCLASH_READ_KEY }}
+          ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
       - name: Verify private OpenClash source access and archive checksum
         run: sh contrib/r66s/prepare-openclash.sh --source-only
 
@@ -77,7 +77,7 @@ jobs:
       - name: Authorize read-only OpenClash source access
         uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
-          ssh-private-key: ${{ secrets.OPENCLASH_READ_KEY }}
+          ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
 
       - name: Restore downloaded sources
         uses: actions/cache@v4
@@ -98,6 +98,7 @@ jobs:
         run: |
           sh contrib/r66s/prepare-defaults.sh
           sh contrib/r66s/prepare-openclash.sh | tee logs/openclash-sources.log
+          sh contrib/r66s/prepare-r66s-packages.sh | tee logs/r66s-packages.log
           cp config/r66s-lede.config .config
           make defconfig 2>&1 | tee logs/defconfig.log
           grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config
@@ -114,7 +115,7 @@ jobs:
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
-          for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
+          for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
           grep -qx 'CONFIG_PACKAGE_dnsmasq_full_nftset=y' .config
@@ -132,6 +133,9 @@ jobs:
           git diff --check
           sh -n target/linux/rockchip/armv8/base-files/etc/board.d/02_network
           sh -n target/linux/rockchip/armv8/base-files/etc/hotplug.d/net/40-net-smp-affinity
+
+      - name: Configure R66S private packages
+        run: sh contrib/r66s/prepare-r66s-packages.sh
 
       - name: Download sources
         run: make download -j4 2>&1 | tee logs/download.log
@@ -162,7 +166,7 @@ jobs:
           for package in base firewall package-manager; do
             grep -q "^luci-i18n-${package}-zh-cn " "$manifest"
           done
-          for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
+          for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -q "^${package} " "$manifest"
           done
           if grep -Eq '^(dnsmasq|ip-tiny) ' "$manifest"; then

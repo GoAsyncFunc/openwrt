@@ -1,5 +1,9 @@
 src-git packages https://git.openwrt.org/feed/packages.git
 src-git luci https://git.openwrt.org/project/luci.git
+# Dockerman is maintained outside the official LuCI feed; pin the source so
+# incremental builds do not silently change the management UI.
+src-git dockerman https://github.com/lisaac/luci-app-dockerman.git^6fd9937954e0b080bf07967182d714ea21fe7eb1
+src-git dockerlib https://github.com/lisaac/luci-lib-docker.git^98a663449208b65e68702ad0f3ad61c536bfa40c
 src-git routing https://git.openwrt.org/feed/routing.git
 src-git telephony https://git.openwrt.org/feed/telephony.git
 src-git video https://github.com/openwrt/video.git

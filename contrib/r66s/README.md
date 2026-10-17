@@ -105,8 +105,9 @@ Firewall4/nftables: `luci-compat`, `dnsmasq-full` with DHCP and nftset support,
 nft-tproxy kernel modules. The minimal `dnsmasq` and `ip-tiny` packages are
 disabled to avoid conflicting providers.
 
-Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` (already
-included in Actions). It verifies SHA-256 hashes for the OpenClash source
+Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` and
+`sh contrib/r66s/prepare-r66s-packages.sh` (already included in Actions). They
+verify SHA-256 hashes for the OpenClash source
 archive from the pinned `main` commit of `GoAsyncFunc/r66s-packages` and the upstream
 ARM64 Meta core, both pinned to immutable commit IDs in the script. After
 updating the fork, update `source_revision` and `source_tar_sha` in the script
@@ -116,13 +117,13 @@ the generated package is linked under the ignored `package/openwrt-packages`
 directory. No upstream package or feed definitions are replaced.
 
 `GoAsyncFunc/r66s-packages` is an independent private source snapshot. On cache
-miss, the preparation script fetches only the pinned commit over SSH and
+miss, the preparation script fetches only the pinned `openclash/` subtree over SSH and
 creates an archive of `openclash/luci-app-openclash` with `git -c tar.umask=0002 archive`
 and `gzip -n`. Because gzip output varies across platforms, `source_tar_sha`
 checks the uncompressed tar payload; gzip integrity is checked separately.
 Compute it with `git -c tar.umask=0002 archive --format=tar
 --prefix=OpenClash-<full commit SHA>/ <full commit SHA> openclash/luci-app-openclash
-| shasum -a 256`. Actions uses the `OPENCLASH_READ_KEY` secret,
+| shasum -a 256`. Actions uses the `R66S_PACKAGES_READ_KEY` secret,
 a read-only deploy key scoped to that repository; local builds need SSH
 access too. `--source-only` downloads and verifies just this archive for
 prefetching on the host before a Docker build. Credentials are never bundled.

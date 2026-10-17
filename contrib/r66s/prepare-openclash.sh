@@ -82,7 +82,7 @@ package_source="$PWD/$source_dir/luci-app-openclash"
 if [ -e "$package_dir" ] || [ -L "$package_dir" ]; then
 	test -L "$package_dir"
 	case "$(readlink "$package_dir")" in
-		"$PWD/$cache/"OpenClash-*/luci-app-openclash) ;;
+		"$PWD/$cache/"OpenClash-*/openclash/luci-app-openclash) ;;
 		*) echo "Unexpected OpenClash package link: $package_dir" >&2; exit 1 ;;
 	esac
 	ln -sfn "$package_source" "$package_dir"
