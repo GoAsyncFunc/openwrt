@@ -105,8 +105,8 @@ Firewall4/nftables: `luci-compat`, `dnsmasq-full` with DHCP and nftset support,
 nft-tproxy kernel modules. The minimal `dnsmasq` and `ip-tiny` packages are
 disabled to avoid conflicting providers.
 
-Before `make defconfig`, run `sh contrib/r66s/prepare-openclash.sh` and
-`sh contrib/r66s/prepare-r66s-packages.sh` (already included in Actions). They
+Before `make defconfig`, the workflow fetches the pinned prepare scripts from
+the private `r66s-packages` repository and runs them. They
 verify SHA-256 hashes for the OpenClash source
 archive from the pinned `main` commit of `GoAsyncFunc/r66s-packages` and the upstream
 ARM64 Meta core, both pinned to immutable commit IDs in the script. After
@@ -125,8 +125,10 @@ Compute it with `git -c tar.umask=0002 archive --format=tar
 --prefix=OpenClash-<full commit SHA>/ <full commit SHA> openclash/luci-app-openclash
 | shasum -a 256`. Actions uses the `R66S_PACKAGES_READ_KEY` secret,
 a read-only deploy key scoped to that repository; local builds need SSH
-access too. `--source-only` downloads and verifies just this archive for
-prefetching on the host before a Docker build. Credentials are never bundled.
+access too. `--source-only` downloads and verifies the source and generic
+profile archives for prefetching on the host before a Docker build. The
+generic image intentionally embeds the `nomorewalls.yaml` profile and its
+subscription URL; the personalized workflow remains separate and unchanged.
 
 The core is installed at `/etc/openclash/core/clash_meta`. Country.mmdb,
 GeoSite.dat, dashboards and editor assets come from the pinned OpenClash

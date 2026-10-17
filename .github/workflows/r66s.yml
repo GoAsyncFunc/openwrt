@@ -34,6 +34,19 @@ jobs:
       - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
+      - name: Fetch pinned R66S prepare scripts
+        env:
+          R66S_PREPARE_REVISION: dc63d37798ef9bd30808fd6528522d2e3bdef20b
+        run: |
+          # prepare 脚本属于私有 r66s-packages，OpenWrt 源码不再保存其实现。
+          set -euo pipefail
+          checkout="$RUNNER_TEMP/r66s-prepare-source"
+          mkdir -p "$checkout" contrib/r66s
+          git -C "$checkout" init -q
+          GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts" \
+            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PREPARE_REVISION"
+          git -C "$checkout" archive --format=tar FETCH_HEAD prepare/prepare-openclash.sh prepare/prepare-r66s-packages.sh |
+            tar -x -C contrib/r66s --strip-components=1
       - name: Verify private OpenClash source access and archive checksum
         run: sh contrib/r66s/prepare-openclash.sh --source-only
 
@@ -79,15 +92,29 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
 
+      - name: Fetch pinned R66S prepare scripts
+        env:
+          R66S_PREPARE_REVISION: dc63d37798ef9bd30808fd6528522d2e3bdef20b
+        run: |
+          # 与 source-checks 使用同一 revision，确保校验和正式构建一致。
+          set -euo pipefail
+          checkout="$RUNNER_TEMP/r66s-prepare-source"
+          mkdir -p "$checkout" contrib/r66s
+          git -C "$checkout" init -q
+          GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts" \
+            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PREPARE_REVISION"
+          git -C "$checkout" archive --format=tar FETCH_HEAD prepare/prepare-openclash.sh prepare/prepare-r66s-packages.sh |
+            tar -x -C contrib/r66s --strip-components=1
+
       - name: Restore downloaded sources
         uses: actions/cache@v4
         with:
           path: |
             dl
             !dl/r66s-openclash
-          key: r66s-dl-${{ runner.os }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default', 'contrib/r66s/prepare-openclash.sh') }}
+          key: r66s-dl-${{ runner.os }}-prepare-dc63d37798ef9bd30808fd6528522d2e3bdef20b-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
           restore-keys: |
-            r66s-dl-${{ runner.os }}-
+            r66s-dl-${{ runner.os }}-prepare-
 
       - name: Update and install feeds
         run: |
@@ -173,6 +200,13 @@ jobs:
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
+          test -s "${roots[0]}/etc/openclash/config/nomorewalls.yaml"
+          test -x "${roots[0]}/etc/uci-defaults/98-r66s-openclash"
+          grep -Fq "config_subscribe 'nomorewalls'" "${roots[0]}/etc/config/openclash"
+          grep -Fq "option address 'https://raw.githubusercontent.com/GoAsyncFunc/r66s-packages/refs/heads/main/nomorewalls.yaml?token=" "${roots[0]}/etc/config/openclash"
+          grep -Fq "option sub_ua 'clash-verge/v2.4.5'" "${roots[0]}/etc/config/openclash"
+          grep -Fq "option auto_update '1'" "${roots[0]}/etc/config/openclash"
+          grep -Fq "option config_path '/etc/openclash/config/nomorewalls.yaml'" "${roots[0]}/etc/config/openclash"
           cmp target/linux/rockchip/armv8/base-files/etc/board.d/02_network "${roots[0]}/etc/board.d/02_network"
           for setting in "ipv6_enable '1'" "ipv6_dns '1'" "ipv6_mode '0'" "enable_v6_udp_proxy '1'"; do
             grep -Fq "option $setting" "${roots[0]}/etc/config/openclash"
