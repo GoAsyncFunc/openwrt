@@ -65,7 +65,11 @@ Downloaded sources are cached; feed revisions and the full resolved
 configuration are saved with the build artifacts.
 
 The configuration enables LuCI and ethtool, with a 512 MiB SquashFS root
-partition. It does not embed a password. During compilation, the workflow runs
+partition. Simplified Chinese translations are included for the LuCI base
+interface, firewall and package manager. LuCI keeps its upstream automatic
+language selection; Chinese can also be selected in System > System >
+Language and Style. OpenClash includes its own Simplified Chinese translation.
+It does not embed a password. During compilation, the workflow runs
 `sh contrib/r66s/prepare-defaults.sh` to generate `files/bin/config_generate`
 from the upstream network generator, with its default LAN IP already set to
 `192.168.77.1`. The normal `/24` mask is retained. This copy is packaged into

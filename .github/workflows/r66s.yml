@@ -71,6 +71,10 @@ jobs:
           grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config
           grep -qx 'CONFIG_PACKAGE_kmod-r8125-rss=y' .config
           grep -qx 'CONFIG_PACKAGE_luci=y' .config
+          grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          for package in base firewall package-manager; do
+            grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
+          done
           for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -113,6 +117,9 @@ jobs:
           gzip -t "$payload"
           manifest="${image%-squashfs-sysupgrade.img.gz}.manifest"
           grep -q '^kmod-r8125-rss ' "$manifest"
+          for package in base firewall package-manager; do
+            grep -q "^luci-i18n-${package}-zh-cn " "$manifest"
+          done
           for package in luci-app-openclash luci-compat dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -q "^${package} " "$manifest"
           done
@@ -125,6 +132,7 @@ jobs:
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
           test -s "${roots[0]}/etc/openclash/Country.mmdb"
           test -s "${roots[0]}/etc/openclash/GeoSite.dat"
+          test -s "${roots[0]}/usr/lib/lua/luci/i18n/openclash.zh-cn.lmo"
           file "${roots[0]}/etc/openclash/core/clash_meta" | grep -q 'ARM aarch64'
           grep -Fq 'lan) ipad=${ipaddr:-"192.168.77.1"}' "${roots[0]}/bin/config_generate"
           if grep -Eq '^kmod-(r8169|r8125) ' "$manifest"; then
