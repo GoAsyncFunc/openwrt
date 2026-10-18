@@ -1,0 +1,16 @@
+#!/bin/sh
+
+case "$(cat /tmp/sysinfo/board_name)" in
+    xiaomi,redmi-router-ac2100) ;;
+    *) exit 0 ;;
+esac
+
+uci -q batch <<'EOF' || exit 1
+set system.@system[0].timezone='CST-8'
+set system.@system[0].zonename='Asia/Shanghai'
+set luci.main.lang='zh_cn'
+commit system
+commit luci
+EOF
+
+exit 0
