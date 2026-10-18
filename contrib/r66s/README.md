@@ -223,27 +223,73 @@ On the first boot with a verified 32 GB data partition, the storage initializer
 creates `/mnt/data/docker`, sets Docker's `data_root` there, enables the daemon
 and starts it. If the data partition is missing, unrecognized or mounted at a
 different path, Docker is not enabled; this prevents the 1 GiB system overlay
-from being consumed by container layers. Existing Firewall4 and OpenClash
-settings are kept unchanged until Docker networking is tested on hardware.
+from being consumed by container layers.
+
+`prepare-defaults.sh` installs the bridge wiring as a second initializer,
+`94-r66s-docker-network` -> `/usr/sbin/r66s-docker-network`. It calls
+`/etc/init.d/dockerd uciadd` and then fills in what that helper leaves open:
+
+- `firewall.r66s_docker_lan` forwards `lan` to `docker`. `uciadd` creates the
+  `docker` zone but never a forwarding, so a DNAT'ed packet falls through to the
+  `lan` zone's `forward` policy: a published port answers on the router itself
+  and times out from the LAN.
+- `firewall.r66s_docker_wan` states the `docker` to `wan` intent explicitly.
+  Container-originated traffic is already accepted by the zone's `forward`
+  policy, so this changes no packet today. WAN to `docker` stays unforwarded,
+  and `dockerd` additionally rejects it in `DOCKER-USER` through
+  `blocked_interfaces 'wan'`.
+- `dockerd.globals.dns` points containers at the router's LAN address. Docker
+  resolves the container nameservers when a container is created and discards
+  the loopback entry in OpenWrt's `/etc/resolv.conf`, so containers silently
+  fell back to `8.8.8.8`.
+
+Ordering is part of the contract. rcS starts the enabled daemon at `S99`, after
+fw4 has loaded at `S19`, so a first boot that relied on the daemon's own `boot()`
+hook would bring the firewall up without the `docker` zone. The initializer runs
+in the uci-defaults phase at `S10` and must stay ahead of `96-r66s-docker`,
+because `uciadd` refuses to change the configuration while the daemon runs. It
+exits non-zero, and its wrapper is kept for the next boot, while the `docker`
+zone or the `dockerd` configuration is missing, so it never writes a forwarding
+that a firewall configuration fw4 could not load. The resolver entry is replaced
+instead of appended, so a retried first boot cannot stack duplicates. Nothing
+here enables the daemon: without the verified data partition `96` never starts
+Docker, and the zone simply has no device to match.
+
+`test-docker-network.sh` covers the initializer in CI without root, Docker or a
+loop device. `dockerd` and `uci` are replaced by stubs that record every call,
+so the two forwardings, the single resolver entry, the retry contract and the
+guard against touching the firewall while the zone is missing are all asserted.
 
 The initial acceptance test must cover image pulls, bridge-container DNS and
 outbound access, LAN access to published ports, WAN restrictions, IPv4/IPv6
 forwarding, firewall reload, OpenClash restart, WAN reconnect and reboot.
 
-- Keep the existing Firewall4/nftables and OpenClash setup. Review the exact
-  pinned dockerd package and startup script before choosing a firewall backend.
-  Do not assume that selecting the packages alone completes integration.
-- Docker's default iptables backend can set forwarding policy to DROP,
-  affecting the router's LAN-to-WAN forwarding, including IPv6. Check whether
-  `ip-forward-no-drop` is needed and how the installed package accepts it;
-  do not assume an arbitrary UCI option is passed to dockerd.
-- Configure Docker's firewall zone, container NAT and published-port access
-  explicitly. Do not use global forwarding ACCEPT or disable Docker's firewall
-  rules as a blanket workaround. Docker's native nftables backend is currently
-  experimental and requires checking the OpenWrt script's DOCKER-USER handling.
+- Keep the existing Firewall4/nftables and OpenClash setup, and recheck the
+  `dockerd` init script after a package update: selecting the packages alone
+  never completed this integration, and the initializer above assumes the
+  helper still creates the zone while the daemon is stopped.
+- Docker's iptables backend can set the filter `FORWARD` policy to DROP, which
+  would affect the router's LAN-to-WAN forwarding, including IPv6. The `dockerd`
+  init script from the packages feed maps a fixed set of UCI options into
+  `daemon.json` and passes no extra daemon flags, so `ip-forward-no-drop` cannot
+  be selected over UCI; the only lever is `alt_config_file`, which replaces the
+  generated `daemon.json` wholesale. The device kept LAN-to-WAN forwarding
+  intact with Docker running, so treat this as a regression to recheck after a
+  Docker version change rather than a present defect.
+- Keep the shipped forwardings and the daemon's own rules. Do not add a global
+  forwarding ACCEPT and do not disable Docker's firewall rules as a blanket
+  workaround: the initializer above is the narrow version of that change.
+  Docker's native nftables backend is still experimental and would change how
+  `DOCKER-USER` is handled, so keep the iptables backend (`iptables '1'`).
 - Verify bridge-container outbound access/DNS, LAN access to published ports,
   intended WAN restrictions, and unaffected LAN-to-WAN IPv4/IPv6 forwarding.
   Repeat after firewall reload, OpenClash restart, WAN reconnect and reboot.
+- Containers now resolve through dnsmasq, so with OpenClash enabled in `fake-ip`
+  mode they receive fake addresses. Whether OpenClash intercepts `docker0`
+  traffic is still unverified: if it does not, either add the `docker` zone to
+  OpenClash's proxy scope or give containers a resolver that bypasses it. The
+  initializer only picks the resolver address; it does not decide the proxy
+  path. Check this with OpenClash disabled and enabled.
 - For an initial Cloudflare Tunnel container, host networking can reduce
   bridge/NAT complexity; it does not establish that Docker bridge mode works.
 - Store container data under `/mnt/data/docker`, with a verified data mount

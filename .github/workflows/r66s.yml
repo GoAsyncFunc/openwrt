@@ -61,6 +61,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends util-linux fdisk e2fsprogs
           sudo bash contrib/r66s/test-storage.sh
+      - name: Test the Docker network initializer
+        run: |
+          # 纯 shell 桩测试，不需要 root、loop 设备或 Docker。
+          sh contrib/r66s/test-docker-network.sh
 
   build:
     needs: [storage-checks, openclash-source-checks]
@@ -139,6 +143,7 @@ jobs:
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
           sh -n files/usr/sbin/r66s-data-setup
+          sh -n files/usr/sbin/r66s-docker-network
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
@@ -226,6 +231,13 @@ jobs:
           test -x "${roots[0]}/usr/sbin/r66s-data-setup"
           cmp contrib/r66s/r66s-data-setup "${roots[0]}/usr/sbin/r66s-data-setup"
           test -x "${roots[0]}/etc/uci-defaults/95-r66s-storage"
+          test -x "${roots[0]}/usr/sbin/r66s-docker-network"
+          cmp contrib/r66s/r66s-docker-network "${roots[0]}/usr/sbin/r66s-docker-network"
+          # docker 区域由 dockerd 的 uciadd 建立，LAN 转发与容器 DNS 由 94 补齐。
+          test -x "${roots[0]}/etc/uci-defaults/94-r66s-docker-network"
+          grep -Fxq '/usr/sbin/r66s-docker-network' "${roots[0]}/etc/uci-defaults/94-r66s-docker-network"
+          # 顺序即语义：94 必须早于 96 启动守护进程，否则 uciadd 拒绝改配置。
+          test -x "${roots[0]}/etc/uci-defaults/96-r66s-docker"
           # Check the actual compressed image's MBR, not just .config.
           python3 - "$payload" <<'PY'
           import gzip, struct, sys

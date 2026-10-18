@@ -1,0 +1,76 @@
+#!/bin/sh
+# Wire the Docker bridge into the R66S firewall and point containers at the
+# router's own resolver.
+#
+# /etc/init.d/dockerd uciadd creates network.docker, the docker0 bridge and the
+# firewall.docker zone, but it never adds a firewall forwarding section. Under
+# fw4 that leaves LAN -> docker0 traffic - including packets already DNAT'ed to
+# a published port - subject to the lan zone's forward policy, so a published
+# port answers on the router itself and times out from the LAN. WAN -> docker
+# stays unforwarded on purpose; dockerd additionally rejects it in DOCKER-USER
+# through blocked_interfaces 'wan'.
+#
+# Docker resolves the container nameservers when a container is created and
+# discards the 127.0.0.1 entry in OpenWrt's /etc/resolv.conf, silently falling
+# back to 8.8.8.8. Point containers at the router so they use dnsmasq.
+#
+# 该脚本必须早于 96-r66s-docker 运行：dockerd 运行时 uciadd 会拒绝改动配置。
+# 守护进程自己的 init 只在 boot() 里调用 uciadd，而 96 用的是 start，所以缺少本
+# 脚本时首次启动的 fw4（S19）加载的是一个没有 docker 区域的配置。运行时机在
+# uci-defaults 阶段（S10）也早于 fw4，区域与转发一次到位。
+# 它由 /etc/uci-defaults/94-r66s-docker-network 调用，退出 0 即删除该包装脚本，
+# 未就绪时保留到下次启动。
+
+R66S_DOCKERD_INIT="${R66S_DOCKERD_INIT:-/etc/init.d/dockerd}"
+R66S_DOCKER_DNS="${R66S_DOCKER_DNS:-192.168.77.1}"
+
+r66s_docker_network_fail() {
+    echo "r66s-docker-network: $*" >&2
+    return 1
+}
+
+r66s_docker_network_main() {
+    [ -x "$R66S_DOCKERD_INIT" ] || {
+        r66s_docker_network_fail 'the dockerd service is missing.'
+        return 1
+    }
+    if ! "$R66S_DOCKERD_INIT" running; then
+        # Creates network.docker, the docker0 bridge and the firewall.docker zone.
+        "$R66S_DOCKERD_INIT" uciadd >/dev/null 2>&1 || return 1
+    fi
+    # A forwarding naming a zone fw4 cannot resolve makes fw4 refuse to load, so
+    # verify the zone before touching the firewall configuration.
+    uci -q get firewall.docker >/dev/null && uci -q get network.docker >/dev/null || {
+        r66s_docker_network_fail 'the Docker zone is not configured yet.'
+        return 1
+    }
+    uci -q get dockerd.globals >/dev/null || {
+        r66s_docker_network_fail 'the dockerd configuration is missing.'
+        return 1
+    }
+
+    # LAN clients reach published ports. The docker zone already forwards
+    # container-originated traffic, so docker -> wan only states that intent
+    # explicitly instead of relying on a side effect of uciadd.
+    uci -q delete firewall.r66s_docker_lan
+    uci set firewall.r66s_docker_lan='forwarding' || return 1
+    uci set firewall.r66s_docker_lan.src='lan' || return 1
+    uci set firewall.r66s_docker_lan.dest='docker' || return 1
+    uci -q delete firewall.r66s_docker_wan
+    uci set firewall.r66s_docker_wan='forwarding' || return 1
+    uci set firewall.r66s_docker_wan.src='docker' || return 1
+    uci set firewall.r66s_docker_wan.dest='wan' || return 1
+    uci commit firewall || return 1
+
+    # Replace the entry so a retried first boot cannot stack duplicates.
+    uci -q del_list "dockerd.globals.dns=$R66S_DOCKER_DNS"
+    uci add_list "dockerd.globals.dns=$R66S_DOCKER_DNS" || return 1
+    uci commit dockerd || return 1
+    return 0
+}
+
+# Functions can be sourced by the shell integration tests; overridden
+# R66S_DOCKERD_INIT lets them run without the daemon or root.
+if [ "${0##*/}" = r66s-docker-network ]; then
+    r66s_docker_network_main "$@"
+fi
