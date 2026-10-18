@@ -213,6 +213,11 @@ jobs:
           done
           test -s "${roots[0]}/etc/openclash/Country.mmdb"
           test -s "${roots[0]}/etc/openclash/GeoSite.dat"
+          test -s "${roots[0]}/etc/openclash/GeoIP.dat"
+          # 覆写模块必须保持出厂关闭：误开启会生成核心无法解析的规则，
+          # OpenClash 因此启动失败并把总开关复位成 0，开箱即用就不成立。
+          test "$(grep -c "option enable '1'" "${roots[0]}/etc/config/openclash")" -eq 1
+          test "$(grep -c "option enable '0'" "${roots[0]}/etc/config/openclash")" -eq 4
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/openclash.zh-cn.lmo"
           file "${roots[0]}/etc/openclash/core/clash_meta" | grep -q 'ARM aarch64'
           grep -Fq 'lan) ipad=${ipaddr:-"192.168.77.1"}' "${roots[0]}/bin/config_generate"
