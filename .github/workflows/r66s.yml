@@ -36,7 +36,7 @@ jobs:
           ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
       - name: Fetch pinned R66S prepare scripts
         env:
-          R66S_PREPARE_REVISION: 952e5b566646f589c6ad020788dbf7ca57602455
+          R66S_PREPARE_REVISION: 4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3
         run: |
           # prepare 脚本属于私有 r66s-packages，OpenWrt 源码不再保存其实现。
           set -euo pipefail
@@ -98,7 +98,7 @@ jobs:
 
       - name: Fetch pinned R66S prepare scripts
         env:
-          R66S_PREPARE_REVISION: 952e5b566646f589c6ad020788dbf7ca57602455
+          R66S_PREPARE_REVISION: 4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3
         run: |
           # 与 source-checks 使用同一 revision，确保校验和正式构建一致。
           set -euo pipefail
@@ -116,7 +116,7 @@ jobs:
           path: |
             dl
             !dl/r66s-openclash
-          key: r66s-dl-${{ runner.os }}-prepare-952e5b566646f589c6ad020788dbf7ca57602455-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
+          key: r66s-dl-${{ runner.os }}-prepare-4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
           restore-keys: |
             r66s-dl-${{ runner.os }}-prepare-
 
