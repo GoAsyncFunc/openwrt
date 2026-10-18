@@ -3,18 +3,29 @@
 # router's own resolver.
 #
 # /etc/init.d/dockerd uciadd creates network.docker, the docker0 bridge and the
-# firewall.docker zone, but it never adds a firewall forwarding section, so
-# LAN -> docker0 traffic - including packets already DNAT'ed to a published port
-# - depends on the lan zone's own forward policy instead of on an explicit rule.
-# The stock lan zone forwards to ACCEPT, so fw4 accepts such traffic on its own;
-# a hardened configuration that sets that policy to REJECT/DROP breaks published
-# ports without touching Docker at all. The forwarding added here removes that
-# dependency and mirrors how the stock configuration expresses lan -> wan.
+# firewall.docker zone, but it never adds a firewall forwarding section. fw4
+# renders a forwarding as "jump accept_to_<dest>" inside forward_<src>, and the
+# accept_to_<zone> chains match oifname against the destination zone's devices -
+# a zone's own `forward` policy only names that chain, it does not accept
+# whatever enters the zone chain. Without the forwarding, LAN -> docker0 traffic,
+# including a packet already DNAT'ed to a published port, matches nothing in
+# forward_lan and falls through to "jump handle_reject".
 #
-# docker -> wan is stated explicitly as well. Container-originated traffic is
-# already accepted by the docker zone's `forward` policy, so this changes no
-# packet today; WAN -> docker stays unforwarded, and dockerd additionally
-# rejects it in DOCKER-USER through blocked_interfaces 'wan'.
+# Verified on the R66S (Docker 29.6.1, firewall4 b6e5157527): tracing a LAN
+# client connecting to a published port showed
+#   forward -> jump forward_lan
+#           -> jump accept_to_wan   (oifname "eth1",   no match)
+#           -> jump accept_to_lan   (oifname "br-lan", no match)
+#           -> jump handle_reject   -> reject with tcp reset
+# while Docker's own ip filter DOCKER chain accepted the very same packet. The
+# reset carries the post-DNAT source address, so the client discarded it and the
+# connection timed out instead of failing fast. Adding the forwarding below made
+# the same request answer 200 from the LAN, with lan -> wan untouched.
+#
+# docker -> wan is also stated explicitly. Container-originated traffic is
+# already accepted through the docker zone's own `forward` policy, so this
+# changes no packet today; WAN -> docker stays unforwarded, and dockerd
+# additionally rejects it in DOCKER-USER through blocked_interfaces 'wan'.
 #
 # Docker resolves the container nameservers when a container is created and
 # discards the 127.0.0.1 entry in OpenWrt's /etc/resolv.conf, silently falling

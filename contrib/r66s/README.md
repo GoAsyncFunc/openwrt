@@ -266,6 +266,12 @@ loop device. `dockerd` and `uci` are replaced by stubs that record every call,
 so the two forwardings, the single resolver entry, the retry contract and the
 guard against touching the firewall while the zone is missing are all asserted.
 
+The hardware checks used to confirm this section: `nft monitor trace` with a
+temporary `meta nftrace set 1` rule for the tested flow, the counters and chain
+contents of `forward_lan`, `accept_to_lan`, `accept_to_wan` and
+`accept_to_docker`, `conntrack -L` for the DNAT'ed tuple, and a LAN client
+request to the published port with OpenClash enabled.
+
 The initial acceptance test must cover image pulls, bridge-container DNS and
 outbound access, LAN access to published ports, WAN restrictions, IPv4/IPv6
 forwarding, firewall reload, OpenClash restart, WAN reconnect and reboot.
@@ -290,12 +296,14 @@ forwarding, firewall reload, OpenClash restart, WAN reconnect and reboot.
 - Verify bridge-container outbound access/DNS, LAN access to published ports,
   intended WAN restrictions, and unaffected LAN-to-WAN IPv4/IPv6 forwarding.
   Repeat after firewall reload, OpenClash restart, WAN reconnect and reboot.
-- Containers now resolve through dnsmasq, so with OpenClash enabled in `fake-ip`
-  mode they receive fake addresses. Whether OpenClash intercepts `docker0`
-  traffic is still unverified: if it does not, either add the `docker` zone to
-  OpenClash's proxy scope or give containers a resolver that bypasses it. The
-  initializer only picks the resolver address; it does not decide the proxy
-  path. Check this with OpenClash disabled and enabled.
+- Containers resolve through dnsmasq. With OpenClash enabled the core's DNS
+  hijack (`th dport 53 redirect to :53`) and its TCP redirect cover container
+  traffic as well, which is why a container resolved successfully even with
+  `8.8.8.8`; its redirect and marking rules `return` for `ip daddr
+  @localnetwork`, so they never intercept LAN access to a published port or
+  traffic to the container subnet. Verified with OpenClash enabled in
+  `redir-host-mix` mode; recheck after switching that mode, because `fake-ip`
+  hands containers proxy addresses instead of real ones.
 - For an initial Cloudflare Tunnel container, host networking can reduce
   bridge/NAT complexity; it does not establish that Docker bridge mode works.
 - Store container data under `/mnt/data/docker`, with a verified data mount
