@@ -230,9 +230,15 @@ from being consumed by container layers.
 `/etc/init.d/dockerd uciadd` and then fills in what that helper leaves open:
 
 - `firewall.r66s_docker_lan` forwards `lan` to `docker`. `uciadd` creates the
-  `docker` zone but never a forwarding, so a DNAT'ed packet falls through to the
-  `lan` zone's `forward` policy: a published port answers on the router itself
-  and times out from the LAN.
+  `docker` zone but never a forwarding, so LAN access to a published port is
+  decided by the `lan` zone's own `forward` policy instead of by a rule about
+  the `docker` zone. The stock `lan` zone forwards to ACCEPT and fw4 then
+  accepts the DNAT'ed packet through `forward_lan`; a hardened configuration
+  that sets that policy to REJECT/DROP silently breaks published ports. The
+  forwarding removes that dependency. It is not by itself proof that a missing
+  forwarding caused an observed LAN timeout: fw4 resolves forward traffic by
+  ingress interface only, and a device can also block this path elsewhere (see
+  the OpenClash note below).
 - `firewall.r66s_docker_wan` states the `docker` to `wan` intent explicitly.
   Container-originated traffic is already accepted by the zone's `forward`
   policy, so this changes no packet today. WAN to `docker` stays unforwarded,

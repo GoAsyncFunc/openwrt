@@ -3,12 +3,18 @@
 # router's own resolver.
 #
 # /etc/init.d/dockerd uciadd creates network.docker, the docker0 bridge and the
-# firewall.docker zone, but it never adds a firewall forwarding section. Under
-# fw4 that leaves LAN -> docker0 traffic - including packets already DNAT'ed to
-# a published port - subject to the lan zone's forward policy, so a published
-# port answers on the router itself and times out from the LAN. WAN -> docker
-# stays unforwarded on purpose; dockerd additionally rejects it in DOCKER-USER
-# through blocked_interfaces 'wan'.
+# firewall.docker zone, but it never adds a firewall forwarding section, so
+# LAN -> docker0 traffic - including packets already DNAT'ed to a published port
+# - depends on the lan zone's own forward policy instead of on an explicit rule.
+# The stock lan zone forwards to ACCEPT, so fw4 accepts such traffic on its own;
+# a hardened configuration that sets that policy to REJECT/DROP breaks published
+# ports without touching Docker at all. The forwarding added here removes that
+# dependency and mirrors how the stock configuration expresses lan -> wan.
+#
+# docker -> wan is stated explicitly as well. Container-originated traffic is
+# already accepted by the docker zone's `forward` policy, so this changes no
+# packet today; WAN -> docker stays unforwarded, and dockerd additionally
+# rejects it in DOCKER-USER through blocked_interfaces 'wan'.
 #
 # Docker resolves the container nameservers when a container is created and
 # discards the 127.0.0.1 entry in OpenWrt's /etc/resolv.conf, silently falling
