@@ -93,6 +93,9 @@ jobs:
           for package in base firewall package-manager attendedsysupgrade; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
+          # 翻译包 depends on 对应 app，app 未选中时翻译会被 defconfig 丢掉，
+          # 所以值守升级的 app 必须单独断言。
+          grep -qx 'CONFIG_PACKAGE_luci-app-attendedsysupgrade=y' .config
           ./scripts/diffconfig.sh > logs/config.seed
           git rev-parse HEAD > logs/source-commit.txt
           git diff --check

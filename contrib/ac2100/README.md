@@ -9,6 +9,9 @@
 目前确定的定制只有：
 
 - LuCI 简体中文，包括基础界面、防火墙、软件包管理和值守升级翻译。
+- 值守升级（Attended Sysupgrade）界面：翻译包在 `luci.mk` 里 `depends on`
+  对应 app，必须与 `CONFIG_PACKAGE_luci-app-attendedsysupgrade=y` 成对选中，
+  否则 `defconfig` 会静默丢弃翻译项。
 - 默认语言设为 `zh_cn`。
 - 默认时区设为 `Asia/Shanghai`，UCI 时区值为 `CST-8`。
 
@@ -67,5 +70,8 @@ mtd -r write openwrt-ramips-mt7621-xiaomi_redmi-router-ac2100-squashfs-rootfs0.b
 ```
 
 恢复官方固件需要 PXE/TFTP 服务并按住复位键启动，细节见上面的提交说明。
+
+值守升级走官方 ASU 服务器，按当前软件包列表重新出图，不会带上本分支
+`files/` 里的时区/语言默认值；用它升级后需要重新设置这些默认值。
 
 编译由 Actions 完成；真机刷机、无线与首次启动行为尚未验证。
