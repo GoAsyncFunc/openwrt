@@ -1,0 +1,163 @@
+name: Build AC2100 firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [AC2100]
+    paths:
+      - '.github/workflows/ac2100.yml'
+      - 'config/ac2100.config'
+      - 'files/**'
+      - 'contrib/ac2100/**'
+      - 'target/linux/ramips/**'
+      - 'target/linux/generic/**'
+      - 'include/**'
+      - 'toolchain/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ac2100-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  defaults-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare and check the AC2100 defaults
+        run: |
+          # 与构建任务使用同一份脚本，先确认本地化首次初始化脚本的内容。
+          sh contrib/ac2100/prepare-defaults.sh
+          sh -n files/etc/uci-defaults/99-ac2100-localization
+          grep -Fq "xiaomi,redmi-router-ac2100" files/etc/uci-defaults/99-ac2100-localization
+          grep -Fq "set system.@system[0].timezone='CST-8'" files/etc/uci-defaults/99-ac2100-localization
+          grep -Fq "set system.@system[0].zonename='Asia/Shanghai'" files/etc/uci-defaults/99-ac2100-localization
+          grep -Fq "set luci.main.lang='zh_cn'" files/etc/uci-defaults/99-ac2100-localization
+
+  build:
+    needs: [defaults-checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          # 与 R66S 固件构建同一套依赖，避免机型差异导致工具缺失。
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev libelf-dev python3 python3-dev \
+            python3-setuptools python3-pyelftools rsync swig unzip zlib1g-dev \
+            file wget curl ca-certificates bzip2 xz-utils zstd patch \
+            diffutils perl time cpio bc device-tree-compiler
+          mkdir -p logs
+          df -h .
+
+      - name: Restore downloaded sources
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ac2100-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default') }}
+          restore-keys: |
+            ac2100-dl-${{ runner.os }}-
+
+      - name: Update and install feeds
+        run: |
+          ./scripts/feeds update -a 2>&1 | tee logs/feeds-update.log
+          ./scripts/feeds install -a 2>&1 | tee logs/feeds-install.log
+
+      - name: Configure AC2100
+        run: |
+          sh contrib/ac2100/prepare-defaults.sh
+          cp config/ac2100.config .config
+          make defconfig 2>&1 | tee logs/defconfig.log
+          # 目标、机型与中文界面必须真的落进 .config；defconfig 会静默丢弃
+          # feeds 里不存在的包，所以这里逐项断言。
+          grep -qx 'CONFIG_TARGET_ramips=y' .config
+          grep -qx 'CONFIG_TARGET_ramips_mt7621=y' .config
+          grep -qx 'CONFIG_TARGET_ramips_mt7621_DEVICE_xiaomi_redmi-router-ac2100=y' .config
+          grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config
+          for package in base firewall package-manager attendedsysupgrade; do
+            grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
+          done
+          ./scripts/diffconfig.sh > logs/config.seed
+          git rev-parse HEAD > logs/source-commit.txt
+          git diff --check
+
+      - name: Download sources
+        run: make download -j4 2>&1 | tee logs/download.log
+
+      - name: Build firmware
+        run: make -j"$(nproc)" V=s 2>&1 | tee logs/build.log
+
+      - name: Verify AC2100 artifacts
+        run: |
+          shopt -s nullglob
+          target_dir=bin/targets/ramips/mt7621
+          # NAND 双系统分区机型：kernel1.bin 与 rootfs0.bin 必须成对出现，
+          # 另外还要有升级用的 sysupgrade.bin 和救砖用的 initramfs-kernel.bin。
+          for suffix in squashfs-kernel1.bin squashfs-rootfs0.bin squashfs-sysupgrade.bin initramfs-kernel.bin; do
+            matches=("$target_dir/"*"-xiaomi_redmi-router-ac2100-"$suffix)
+            test "${#matches[@]}" -eq 1
+            test -s "${matches[0]}"
+            test "$(stat -c%s "${matches[0]}")" -gt 262144
+          done
+          test -s "$target_dir/profiles.json"
+          test -s "$target_dir/sha256sums"
+          for suffix in squashfs-kernel1.bin squashfs-rootfs0.bin squashfs-sysupgrade.bin; do
+            jq -e --arg s "$suffix" \
+              '.profiles["xiaomi_redmi-router-ac2100"].images | any(endswith($s))' \
+              "$target_dir/profiles.json"
+          done
+          (cd "$target_dir" && sha256sum -c sha256sums --ignore-missing)
+          # sysupgrade 映像是含 CONTROL/kernel/root 的 tar（可能是 gzip 压缩的）。
+          sysupgrade=("$target_dir/"*"-xiaomi_redmi-router-ac2100-squashfs-sysupgrade.bin")
+          listing=$(tar tzf "${sysupgrade[0]}" 2>/dev/null || tar tf "${sysupgrade[0]}")
+          for entry in CONTROL kernel root; do
+            printf '%s\n' "$listing" | grep -q "/${entry}\$"
+          done
+          manifest=("$target_dir/"*"xiaomi_redmi-router-ac2100.manifest")
+          test "${#manifest[@]}" -eq 1
+          for package in luci luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
+                         luci-i18n-package-manager-zh-cn luci-i18n-attendedsysupgrade-zh-cn; do
+            grep -q "^${package} " "${manifest[0]}"
+          done
+          echo 'Firmware build and artifact checks passed. Flashing, wireless and first boot still need hardware testing.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload firmware and build metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ac2100-firmware-${{ github.run_number }}
+          path: |
+            bin/targets/ramips/mt7621/*-xiaomi_redmi-router-ac2100-*.bin
+            bin/targets/ramips/mt7621/*xiaomi_redmi-router-ac2100.manifest
+            bin/targets/ramips/mt7621/profiles.json
+            bin/targets/ramips/mt7621/sha256sums
+            bin/targets/ramips/mt7621/*.buildinfo
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload logs and resolved configuration
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ac2100-logs-${{ github.run_number }}
+          include-hidden-files: true
+          path: |
+            logs/
+            .config
+          if-no-files-found: warn
+          retention-days: 14
