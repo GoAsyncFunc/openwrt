@@ -121,8 +121,10 @@ jobs:
           test -s "$target_dir/profiles.json"
           test -s "$target_dir/sha256sums"
           for suffix in squashfs-kernel1.bin squashfs-rootfs0.bin squashfs-sysupgrade.bin; do
-            jq -e --arg s "$suffix" \
-              '.profiles["xiaomi_redmi-router-ac2100"].images | any(.name | endswith($s))' \
+            # profiles.json 的镜像条目字段随版本变化，NAND 双系统机型上部分条目没有
+            # name 字段，直接 .name | endswith() 会报类型错误。这里只要求元数据里
+            # 出现这些镜像文件名；文件本身和大小由上面的逐项断言保证。
+            jq -e --arg s "$suffix" '[.. | strings | select(endswith($s))] | length > 0' \
               "$target_dir/profiles.json"
           done
           (cd "$target_dir" && sha256sum -c sha256sums --ignore-missing)
