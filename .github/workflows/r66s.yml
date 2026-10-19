@@ -198,6 +198,14 @@ jobs:
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
+          # MosDNS 先内置软件包，保持默认停用，后续单独验证 DNS 拓扑。
+          for package in mosdns luci-app-mosdns luci-i18n-mosdns-zh-cn geo2txt v2ray-geoip v2ray-geosite; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config
+          done
+          mosdns_config=package/openwrt-packages/luci-app-mosdns/root/etc/config/mosdns
+          grep -qx "[[:space:]]*option enabled '0'" "$mosdns_config"
+          grep -qx "[[:space:]]*option redirect '0'" "$mosdns_config"
+          grep -qx "[[:space:]]*option listen_address '127.0.0.1'" "$mosdns_config"
           for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -246,6 +254,9 @@ jobs:
           for package in base firewall package-manager; do
             grep -q "^luci-i18n-${package}-zh-cn " "$manifest"
           done
+          for package in mosdns luci-app-mosdns luci-i18n-mosdns-zh-cn geo2txt v2ray-geoip v2ray-geosite; do
+            grep -q "^${package} " "$manifest"
+          done
           for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -q "^${package} " "$manifest"
           done
@@ -255,6 +266,13 @@ jobs:
           fi
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
+          test -x "${roots[0]}/usr/bin/mosdns"
+          test -x "${roots[0]}/usr/bin/geo2txt"
+          test -s "${roots[0]}/usr/share/v2ray/geoip.dat"
+          test -s "${roots[0]}/usr/share/v2ray/geosite.dat"
+          grep -qx "[[:space:]]*option enabled '0'" "${roots[0]}/etc/config/mosdns"
+          grep -qx "[[:space:]]*option redirect '0'" "${roots[0]}/etc/config/mosdns"
+          grep -qx "[[:space:]]*option listen_address '127.0.0.1'" "${roots[0]}/etc/config/mosdns"
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
           test -s "${roots[0]}/etc/openclash/config/nomorewalls.yaml"
           test -x "${roots[0]}/etc/uci-defaults/98-r66s-openclash"
