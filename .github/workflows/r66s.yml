@@ -2,6 +2,12 @@ name: Build R66S firmware
 
 on:
   workflow_dispatch:
+    inputs:
+      r66s_packages_ref:
+        description: r66s-packages ref (branch, tag or full commit) supplying the prepare scripts and firmware content
+        default: main
+        required: true
+        type: string
   push:
     branches: [r66s]
     paths:
@@ -25,8 +31,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  openclash-source-checks:
+  resolve-r66s-packages:
     runs-on: ubuntu-24.04
+    outputs:
+      # 每次构建只解析一次：两个下游 job 和缓存键都用这个提交。
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,9 +43,45 @@ jobs:
       - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
         with:
           ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
-      - name: Fetch pinned R66S prepare scripts
+      - name: Resolve the r66s-packages revision
+        id: resolve
         env:
-          R66S_PREPARE_REVISION: 4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3
+          PACKAGES_REF: ${{ inputs.r66s_packages_ref || 'main' }}
+        run: |
+          # 只解析出提交号：prepare 脚本、固件内容和缓存键随后都取自同一提交，
+          # 构建中途 main 前移也不会让脚本和它装配的内容错位。要复现旧固件
+          # 就把当次构建记录的提交号直接传给 r66s_packages_ref。
+          set -euo pipefail
+          export GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts"
+          if [[ "$PACKAGES_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            sha=$PACKAGES_REF
+          else
+            sha=
+            for ref in "$PACKAGES_REF" "refs/heads/$PACKAGES_REF" "refs/tags/$PACKAGES_REF"; do
+              sha=$(git ls-remote git@github.com:GoAsyncFunc/r66s-packages.git "$ref" | awk 'NR==1 {print $1}')
+              if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+                break
+              fi
+            done
+          fi
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "Cannot resolve r66s-packages ref: $PACKAGES_REF" >&2; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "r66s-packages revision: $sha (ref $PACKAGES_REF)" >> "$GITHUB_STEP_SUMMARY"
+
+  openclash-source-checks:
+    needs: resolve-r66s-packages
+    runs-on: ubuntu-24.04
+    env:
+      # prepare 脚本本身也来自该提交，与它装配的固件内容同源。
+      R66S_PACKAGES_REVISION: ${{ needs.resolve-r66s-packages.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: webfactory/ssh-agent@a6f90b1f127823b31d4d4a8d96047790581349bd # v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
+      - name: Fetch R66S prepare scripts at the resolved revision
         run: |
           # prepare 脚本属于私有 r66s-packages，OpenWrt 源码不再保存其实现。
           set -euo pipefail
@@ -44,11 +89,14 @@ jobs:
           mkdir -p "$checkout" contrib/r66s
           git -C "$checkout" init -q
           GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts" \
-            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PREPARE_REVISION"
+            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PACKAGES_REVISION"
           git -C "$checkout" archive --format=tar FETCH_HEAD prepare/prepare-openclash.sh prepare/prepare-r66s-packages.sh |
             tar -x -C contrib/r66s --strip-components=1
-      - name: Verify private OpenClash source access and archive checksum
-        run: sh contrib/r66s/prepare-openclash.sh --source-only
+      - name: Verify r66s-packages access and prefetch both archives
+        run: |
+          # 两个脚本都在这一步预取归档并打印实际使用的提交；正式构建复用同一提交。
+          sh contrib/r66s/prepare-openclash.sh --source-only
+          sh contrib/r66s/prepare-r66s-packages.sh --source-only
 
   storage-checks:
     runs-on: ubuntu-24.04
@@ -67,9 +115,12 @@ jobs:
           sh contrib/r66s/test-docker-network.sh
 
   build:
-    needs: [storage-checks, openclash-source-checks]
+    needs: [resolve-r66s-packages, storage-checks, openclash-source-checks]
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    env:
+      # 整次构建（prepare 脚本、固件内容、缓存键）使用同一个解析结果。
+      R66S_PACKAGES_REVISION: ${{ needs.resolve-r66s-packages.outputs.sha }}
     defaults:
       run:
         shell: bash
@@ -96,9 +147,7 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.R66S_PACKAGES_READ_KEY }}
 
-      - name: Fetch pinned R66S prepare scripts
-        env:
-          R66S_PREPARE_REVISION: 4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3
+      - name: Fetch R66S prepare scripts at the resolved revision
         run: |
           # 与 source-checks 使用同一 revision，确保校验和正式构建一致。
           set -euo pipefail
@@ -106,7 +155,7 @@ jobs:
           mkdir -p "$checkout" contrib/r66s
           git -C "$checkout" init -q
           GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$PWD/contrib/r66s/github-known-hosts" \
-            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PREPARE_REVISION"
+            git -C "$checkout" fetch --depth=1 "git@github.com:GoAsyncFunc/r66s-packages.git" "$R66S_PACKAGES_REVISION"
           git -C "$checkout" archive --format=tar FETCH_HEAD prepare/prepare-openclash.sh prepare/prepare-r66s-packages.sh |
             tar -x -C contrib/r66s --strip-components=1
 
@@ -116,7 +165,7 @@ jobs:
           path: |
             dl
             !dl/r66s-openclash
-          key: r66s-dl-${{ runner.os }}-prepare-4186ba60c035ce6c1b5c4a4c5f98f3f9068321b3-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
+          key: r66s-dl-${{ runner.os }}-prepare-${{ needs.resolve-r66s-packages.outputs.sha }}-${{ hashFiles('target/linux/generic/kernel-6.18', 'package/kernel/r8125/Makefile', 'feeds.conf.default') }}
           restore-keys: |
             r66s-dl-${{ runner.os }}-prepare-
 
@@ -130,6 +179,8 @@ jobs:
           sh contrib/r66s/prepare-defaults.sh
           sh contrib/r66s/prepare-openclash.sh | tee logs/openclash-sources.log
           sh contrib/r66s/prepare-r66s-packages.sh | tee logs/r66s-packages.log
+          # 产物元数据：本次构建的 r66s-packages 提交（脚本与固件内容同源）。
+          printf '%s\n' "$R66S_PACKAGES_REVISION" > logs/r66s-packages-revision.txt
           cp config/r66s-lede.config .config
           make defconfig 2>&1 | tee logs/defconfig.log
           grep -qx 'CONFIG_TARGET_rockchip_armv8_DEVICE_lunzn_fastrhino-r66s=y' .config

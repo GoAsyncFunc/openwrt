@@ -69,7 +69,8 @@ dependencies, updates the feeds, expands `config/r66s-lede.config` with
 `make defconfig`, checks the driver selection, downloads sources and performs
 a full `make -j2 V=s` firmware build. No local Docker environment is required.
 Downloaded sources are cached; feed revisions and the full resolved
-configuration are saved with the build artifacts.
+configuration are saved with the build artifacts. The logs also record the
+resolved `r66s-packages` commit used for the build.
 
 The configuration enables LuCI and ethtool, with a 1024 MiB SquashFS root
 partition. Simplified Chinese translations are included for the LuCI base
@@ -105,23 +106,32 @@ Firewall4/nftables: `luci-compat`, `dnsmasq-full` with DHCP and nftset support,
 nft-tproxy kernel modules. The minimal `dnsmasq` and `ip-tiny` packages are
 disabled to avoid conflicting providers.
 
-Before `make defconfig`, the workflow fetches the pinned prepare scripts from
-the private `r66s-packages` repository and runs them. They
-verify SHA-256 hashes for the OpenClash source
-archive from the pinned `main` commit of `GoAsyncFunc/r66s-packages` and the upstream
-ARM64 Meta core, both pinned to immutable commit IDs in the script. After
-updating the fork, update `source_revision` and `source_tar_sha` in the script
-to include those changes in firmware builds. Sources and downloads are
+Before `make defconfig`, the workflow runs the prepare scripts from the
+private `r66s-packages` repository. A `resolve-r66s-packages` job resolves
+`r66s_packages_ref` (default `main`; pass a full commit to rebuild an older
+firmware) to one commit per run, and both jobs fetch the scripts at that same
+commit, so the scripts and the firmware content they assemble always come from
+one revision. Pushing to `r66s-packages` is therefore enough to change the next
+firmware build; no pin in this repository has to be updated. Only the
+third-party downloads keep fixed checksums: the upstream ARM64 Meta core and
+the GeoIP database are verified against the SHA-256 values in the script. The
+resolved commit is written to the run summary and to
+`logs/r66s-packages-revision.txt`, and each archive's SHA-256 is printed into
+the build logs. Sources and downloads are
 cached under `dl/r66s-openclash`, and
 the generated package is linked under the ignored `package/openwrt-packages`
 directory. No upstream package or feed definitions are replaced.
 
 `GoAsyncFunc/r66s-packages` is an independent private source snapshot. On cache
-miss, the preparation script fetches only the pinned `openclash/` subtree over SSH and
+miss, the preparation script fetches only the `openclash/` subtree at the
+resolved commit over SSH and
 creates an archive of `openclash/luci-app-openclash` with `git -c tar.umask=0002 archive`
-and `gzip -n`. Because gzip output varies across platforms, `source_tar_sha`
-checks the uncompressed tar payload; gzip integrity is checked separately.
-Compute it with `git -c tar.umask=0002 archive --format=tar
+and `gzip -n`. Because gzip output varies across platforms, the recorded SHA-256
+covers the uncompressed tar payload; gzip integrity is checked separately. Run
+without `R66S_PACKAGES_REVISION` (a standalone local run), the script falls back
+to the fixed revision and SHA-256 kept in the script and verifies the archive
+against it. Compute a value the same way with
+`git -c tar.umask=0002 archive --format=tar
 --prefix=OpenClash-<full commit SHA>/ <full commit SHA> openclash/luci-app-openclash
 | shasum -a 256`. Actions uses the `R66S_PACKAGES_READ_KEY` secret,
 a read-only deploy key scoped to that repository; local builds need SSH
