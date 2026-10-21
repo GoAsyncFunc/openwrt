@@ -198,12 +198,13 @@ jobs:
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
-          # MosDNS 先内置软件包，保持默认停用，后续单独验证 DNS 拓扑。
+          # R66S DNS 联动：默认启用本机上游，不接管 dnsmasq 的 53 端口。
           for package in mosdns luci-app-mosdns luci-i18n-mosdns-zh-cn geo2txt v2ray-geoip v2ray-geosite; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
           mosdns_config=package/openwrt-packages/luci-app-mosdns/root/etc/config/mosdns
-          grep -qx "[[:space:]]*option enabled '0'" "$mosdns_config"
+          grep -qx "[[:space:]]*option enabled '1'" "$mosdns_config"
+          grep -qx "[[:space:]]*option configfile '/etc/mosdns/config_custom.yaml'" "$mosdns_config"
           grep -qx "[[:space:]]*option redirect '0'" "$mosdns_config"
           grep -qx "[[:space:]]*option listen_address '127.0.0.1'" "$mosdns_config"
           for package in adguardhome luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
@@ -281,9 +282,39 @@ jobs:
           test -x "${roots[0]}/usr/bin/geo2txt"
           test -s "${roots[0]}/usr/share/v2ray/geoip.dat"
           test -s "${roots[0]}/usr/share/v2ray/geosite.dat"
-          grep -qx "[[:space:]]*option enabled '0'" "${roots[0]}/etc/config/mosdns"
+          grep -qx "[[:space:]]*option enabled '1'" "${roots[0]}/etc/config/mosdns"
+          grep -qx "[[:space:]]*option configfile '/etc/mosdns/config_custom.yaml'" "${roots[0]}/etc/config/mosdns"
           grep -qx "[[:space:]]*option redirect '0'" "${roots[0]}/etc/config/mosdns"
           grep -qx "[[:space:]]*option listen_address '127.0.0.1'" "${roots[0]}/etc/config/mosdns"
+          # 同时验证源码和最终 rootfs，防止增量构建继续打入旧配置。
+          cmp package/openwrt-packages/luci-app-mosdns/root/etc/mosdns/config_custom.yaml "${roots[0]}/etc/mosdns/config_custom.yaml"
+          cmp package/openwrt-packages/luci-app-openclash/root/usr/share/openclash/r66s_dns.rb "${roots[0]}/usr/share/openclash/r66s_dns.rb"
+          cmp package/openwrt-packages/luci-app-openclash/root/etc/openclash/custom/openclash_custom_overwrite.sh "${roots[0]}/etc/openclash/custom/openclash_custom_overwrite.sh"
+          test -x "${roots[0]}/etc/uci-defaults/97-r66s-dns"
+          test -L "${roots[0]}/etc/rc.d/S75mosdns"
+          test -L "${roots[0]}/etc/rc.d/S99openclash"
+          sh -n "${roots[0]}/etc/uci-defaults/97-r66s-dns"
+          ruby -c "${roots[0]}/usr/share/openclash/r66s_dns.rb"
+          ruby -ryaml -e '
+            c = YAML.safe_load(File.read(ARGV[0]))
+            p = c.fetch("plugins").to_h { |v| [v.fetch("tag"), v] }
+            abort "MosDNS API must stay local" unless c.dig("api", "http") == "127.0.0.1:9091"
+            %w[main_udp main_tcp].each { |k| abort "Bad business DNS listener" unless p[k].dig("args", "listen") == "127.0.0.1:5335" }
+            %w[bootstrap_udp bootstrap_tcp].each { |k| abort "Bad bootstrap listener" unless p[k].dig("args", "listen") == "127.0.0.1:5336" }
+            p["forward_remote"].dig("args", "upstreams").each { |u| abort "Remote DNS must use local proxy" unless u["socks5"] == "127.0.0.1:7894" }
+            p["forward_domestic"].dig("args", "upstreams").each { |u| abort "Bootstrap must not depend on proxy" if u.key?("socks5") }
+          ' "${roots[0]}/etc/mosdns/config_custom.yaml"
+          dns_probe=$(mktemp "$RUNNER_TEMP/r66s-dns.XXXXXX")
+          cp "${roots[0]}/etc/openclash/config/nomorewalls.yaml" "$dns_probe"
+          ruby "${roots[0]}/usr/share/openclash/r66s_dns.rb" "$dns_probe"
+          ruby -ryaml -e '
+            c = YAML.safe_load(File.read(ARGV[0]), aliases: true)
+            abort "Business DNS bypasses MosDNS" unless c.dig("dns", "nameserver") == ["127.0.0.1:5335"]
+            abort "Node DNS has a circular dependency" unless c.dig("dns", "proxy-server-nameserver") == ["127.0.0.1:5336"]
+            abort "Unsafe sniffing" unless c.dig("sniffer", "enable") && c.dig("sniffer", "override-destination") == false
+            abort "Missing DNS proxy" unless c.fetch("listeners").any? { |l| l["port"] == 7894 && l["listen"] == "127.0.0.1" && l["proxy"] == "R66S-DNS" }
+          ' "$dns_probe"
+          rm "$dns_probe"
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
           test -s "${roots[0]}/etc/openclash/config/nomorewalls.yaml"
           test -x "${roots[0]}/etc/uci-defaults/98-r66s-openclash"

@@ -328,36 +328,37 @@ R66S firmware is affected or that all versions are fixed:
 - [Docker native nftables backend](https://docs.docker.com/engine/network/firewall-nftables/)
 - [OpenWrt dockerd default configuration](https://github.com/openwrt/packages/blob/master/utils/dockerd/files/etc/config/dockerd)
 
-## DNS separation and leak prevention notes (pending)
+## DNS separation and leak prevention
 
-Recorded on 2026-10-17 at the user's request. This is a design and acceptance
-record for the future dedicated resolver; no additional DNS packages or custom
-DNS firewall rules have been applied. DNS leak prevention has not been verified
-on the device.
+The R66S build now enables dnsmasq :53 -> OpenClash :7874 -> local MosDNS :5335.
+MosDNS owns domain splitting and caching. Domestic queries use AliDNS DoH;
+other queries use a localhost-only OpenClash SOCKS listener on :7894 and foreign
+DoH. Node bootstrap uses a separate direct MosDNS listener on :5336 to avoid a
+DNS/proxy dependency loop. The profile and subscription-independent overwrite
+implementation live in r66s-packages; the upstream OpenWrt DNS packages are
+not modified. AdGuard Home remains optional and disabled by default.
 
 The current build now enables OpenClash IPv6 proxying and AAAA resolution by
 default, using IPv6 TProxy mode for TCP and UDP. The private overlay explicitly
 overrides disabled IPv6 settings captured from the existing router and disables
 the IPv6 China-route bypass so the profile's rules decide direct/proxy routing.
-This keeps native IPv6 available instead of disabling LAN IPv6. Generic builds
-still require enabling/configuring OpenClash; private builds retain automatic
-startup. An upgrade preserving an old `/etc/config/openclash` can preserve its
+This keeps native IPv6 available instead of disabling LAN IPv6. Generic and
+private builds retain automatic startup. An upgrade preserving an old `/etc/config/openclash` can preserve its
 old disabled IPv6 settings: use the new defaults on a clean flash/reset, or
 explicitly update those settings after a settings-preserving upgrade.
-The live router has not been changed. IPv6 forwarding, proxy-node UDP/IPv6 exit
+This source change does not reconfigure the live router. IPv6 forwarding, proxy-node UDP/IPv6 exit
 support, cold boot and split-tunnel results still need hardware validation;
 these build defaults alone do not establish prevention of all DNS leaks.
 
 - Goal: OpenClash handles proxy selection, traffic routing and the minimal
   DNS functions needed for domain mapping. A dedicated resolver handles DNS
   policy, upstream selection, caching and fallback. Keep dnsmasq for DHCP and
-  local names. The proposed resolver is mosdns; AdGuard Home is optional for
-  filtering and per-client logs. SmartDNS is not initially required. Final
-  package selection and topology still need confirmation before implementation.
+  local names. MosDNS is the upstream resolver; AdGuard Home remains optional
+  for filtering and per-client logs.
 - Preserve OpenClash IPv6 interception when introducing the dedicated resolver;
   coordinate AAAA answers, DHCP/RA DNS advertisement and IPv6 DNS interception
   instead of allowing IPv6 connections to bypass the intended proxy rules.
-- Evaluate a redir-host mapping/forwarding entry in OpenClash with mosdns as
+- Retain redir-host mapping/forwarding in OpenClash with mosdns as
   its upstream. Do not assume that bypassing OpenClash DNS entirely preserves
   domain routing: sniffing cannot recover every connection's hostname. Review
   the pinned OpenClash DNS interception and generated configuration before
