@@ -330,13 +330,29 @@ R66S firmware is affected or that all versions are fixed:
 
 ## DNS separation and leak prevention
 
-The R66S build now enables dnsmasq :53 -> OpenClash :7874 -> local MosDNS :5335.
+The R66S build enables clients -> AdGuard Home :53 -> local MosDNS :5335.
+AdGuard records original client addresses and filters queries; dnsmasq keeps
+DHCP, LAN names and private PTR lookups on :54. AdGuard's web UI stays on :3000.
 MosDNS owns domain splitting and caching. Domestic queries use AliDNS DoH;
 other queries use a localhost-only OpenClash SOCKS listener on :7894 and foreign
 DoH. Node bootstrap uses a separate direct MosDNS listener on :5336 to avoid a
 DNS/proxy dependency loop. The profile and subscription-independent overwrite
 implementation live in r66s-packages; the upstream OpenWrt DNS packages are
-not modified. AdGuard Home remains optional and disabled by default.
+not modified. AdGuard starts from a complete profile and a SHA256-pinned initial
+filter in the firmware, without the setup wizard or a first-boot rule download.
+The DNS group actively probes at startup and excludes subscription metadata
+entries; no individual failed node is hard-coded. TUN DNS hijacking and
+OpenClash's dnsmasq redirect are disabled so client requests reach AdGuard first.
+The first-boot initializer installs an IPv4/IPv6 TCP/UDP port 53 LAN redirect.
+The generic workflow checks these files in the final rootfs; the incremental
+builder reuses those checks and the private repack checks the same entry profile.
+
+AdGuard's default work directory is RAM-backed /var/lib/adguardhome; query history
+and statistics reset on reboot. Router and Docker clients are hidden only from
+rankings, not query logs. The management UI has no bundled account; WAN access
+remains subject to the normal OpenWrt firewall. A router-mode OpenClash dashboard
+connectivity check is genuinely router-originated and appears as ::1/127.0.0.1.
+Client VPN/encrypted DNS can bypass the ordinary port 53 path.
 
 The current build now enables OpenClash IPv6 proxying and AAAA resolution by
 default, using IPv6 TProxy mode for TCP and UDP. The private overlay explicitly
@@ -353,16 +369,15 @@ these build defaults alone do not establish prevention of all DNS leaks.
 - Goal: OpenClash handles proxy selection, traffic routing and the minimal
   DNS functions needed for domain mapping. A dedicated resolver handles DNS
   policy, upstream selection, caching and fallback. Keep dnsmasq for DHCP and
-  local names. MosDNS is the upstream resolver; AdGuard Home remains optional
-  for filtering and per-client logs.
+  local names on :54. MosDNS is AdGuard's only ordinary upstream; AdGuard handles
+  filtering and per-client logs on :53.
 - Preserve OpenClash IPv6 interception when introducing the dedicated resolver;
   coordinate AAAA answers, DHCP/RA DNS advertisement and IPv6 DNS interception
   instead of allowing IPv6 connections to bypass the intended proxy rules.
-- Retain redir-host mapping/forwarding in OpenClash with mosdns as
-  its upstream. Do not assume that bypassing OpenClash DNS entirely preserves
-  domain routing: sniffing cannot recover every connection's hostname. Review
-  the pinned OpenClash DNS interception and generated configuration before
-  fixing ports or adding AdGuard Home to the request path.
+- OpenClash still uses redir-host internally with MosDNS as its upstream, but
+  terminal DNS no longer populates its DNS mapping. Domain routing now relies
+  on HTTP/TLS/QUIC sniffing and IP rules; sniffing cannot recover every protocol's
+  hostname. Do not claim identical domain-rule coverage for opaque protocols.
 - Define permitted DNS egress explicitly. Direct-domain queries may use
   approved direct upstreams; proxy-domain queries must use the intended proxy
   path without silently falling back to the ISP/router DNS. Encrypted DNS

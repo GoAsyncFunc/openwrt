@@ -198,7 +198,7 @@ jobs:
           for package in base firewall package-manager; do
             grep -qx "CONFIG_PACKAGE_luci-i18n-${package}-zh-cn=y" .config
           done
-          # R66S DNS 联动：默认启用本机上游，不接管 dnsmasq 的 53 端口。
+          # R66S DNS：AdGuard :53 -> MosDNS :5335，dnsmasq :54 保留 DHCP/本地域名。
           for package in mosdns luci-app-mosdns luci-i18n-mosdns-zh-cn geo2txt v2ray-geoip v2ray-geosite; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -210,7 +210,8 @@ jobs:
           for package in adguardhome luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
-          grep -qx "[[:space:]]*option enabled '0'" package/openwrt-packages/adguardhome/files/adguardhome.conf
+          grep -qx "[[:space:]]*option enabled '1'" package/openwrt-packages/adguardhome/files/adguardhome.conf
+          test -s package/openwrt-packages/adguardhome/files/adguardhome.yaml
           for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -277,7 +278,19 @@ jobs:
           test -x "${roots[0]}/usr/bin/AdGuardHome"
           test -x "${roots[0]}/etc/init.d/adguardhome"
           test -s "${roots[0]}/www/luci-static/resources/view/adguardhome/config.js"
-          grep -qx "[[:space:]]*option enabled '0'" "${roots[0]}/etc/config/adguardhome"
+          grep -qx "[[:space:]]*option enabled '1'" "${roots[0]}/etc/config/adguardhome"
+          test -L "${roots[0]}/etc/rc.d/S19adguardhome"
+          cmp package/openwrt-packages/adguardhome/files/adguardhome.yaml "${roots[0]}/etc/adguardhome/adguardhome.yaml"
+          filter_hash=$(sed -n 's/^FILTER_HASH:=//p' package/openwrt-packages/adguardhome/Makefile)
+          printf '%s  %s\n' "$filter_hash" "${roots[0]}/usr/share/adguardhome/filter_1.txt" | sha256sum -c -
+          ruby -ryaml -e '
+            c = YAML.load_file(ARGV[0])
+            abort "AdGuard must own DNS entry" unless c.dig("dns", "port") == 53
+            abort "AdGuard bypasses MosDNS" unless c.dig("dns", "upstream_dns") == ["127.0.0.1:5335", "[/lan/]127.0.0.1:54"]
+            abort "Client addresses must remain visible" unless c.dig("dns", "anonymize_client_ip") == false && c.dig("querylog", "enabled")
+            abort "AdGuard cache duplicates MosDNS" unless c.dig("dns", "cache_enabled") == false
+            abort "Private state in generic defaults" unless c.fetch("users").empty? && c.fetch("user_rules").empty?
+          ' "${roots[0]}/etc/adguardhome/adguardhome.yaml"
           test -x "${roots[0]}/usr/bin/mosdns"
           test -x "${roots[0]}/usr/bin/geo2txt"
           test -s "${roots[0]}/usr/share/v2ray/geoip.dat"
@@ -291,6 +304,7 @@ jobs:
           cmp package/openwrt-packages/luci-app-openclash/root/usr/share/openclash/r66s_dns.rb "${roots[0]}/usr/share/openclash/r66s_dns.rb"
           cmp package/openwrt-packages/luci-app-openclash/root/etc/openclash/custom/openclash_custom_overwrite.sh "${roots[0]}/etc/openclash/custom/openclash_custom_overwrite.sh"
           test -x "${roots[0]}/etc/uci-defaults/97-r66s-dns"
+          cmp package/openwrt-packages/luci-app-mosdns/root/etc/uci-defaults/97-r66s-dns "${roots[0]}/etc/uci-defaults/97-r66s-dns"
           test -L "${roots[0]}/etc/rc.d/S75mosdns"
           test -L "${roots[0]}/etc/rc.d/S99openclash"
           sh -n "${roots[0]}/etc/uci-defaults/97-r66s-dns"
@@ -313,6 +327,9 @@ jobs:
             abort "Node DNS has a circular dependency" unless c.dig("dns", "proxy-server-nameserver") == ["127.0.0.1:5336"]
             abort "Unsafe sniffing" unless c.dig("sniffer", "enable") && c.dig("sniffer", "override-destination") == false
             abort "Missing DNS proxy" unless c.fetch("listeners").any? { |l| l["port"] == 7894 && l["listen"] == "127.0.0.1" && l["proxy"] == "R66S-DNS" }
+            abort "TUN must not steal client DNS" if c["tun"].is_a?(Hash) && c["tun"]["dns-hijack"] != []
+            group = c.fetch("proxy-groups").find { |g| g["name"] == "R66S-DNS" }
+            abort "DNS group needs startup health checks" unless group && group["lazy"] == false && group["exclude-filter"]
           ' "$dns_probe"
           rm "$dns_probe"
           test -x "${roots[0]}/etc/openclash/core/clash_meta"
