@@ -206,6 +206,10 @@ jobs:
           grep -qx "[[:space:]]*option enabled '0'" "$mosdns_config"
           grep -qx "[[:space:]]*option redirect '0'" "$mosdns_config"
           grep -qx "[[:space:]]*option listen_address '127.0.0.1'" "$mosdns_config"
+          for package in adguardhome luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config
+          done
+          grep -qx "[[:space:]]*option enabled '0'" package/openwrt-packages/adguardhome/files/adguardhome.conf
           for package in luci-app-openclash luci-compat dockerd docker luci-lib-docker luci-app-dockerman ttyd kmod-veth kmod-br-netfilter kmod-nft-bridge r66s-docker dnsmasq-full ip-full bash curl ca-bundle ruby ruby-yaml unzip kmod-tun kmod-inet-diag kmod-nft-tproxy firewall4; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -266,6 +270,13 @@ jobs:
           fi
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
+          for package in adguardhome luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
+            grep -q "^${package} " "$manifest"
+          done
+          test -x "${roots[0]}/usr/bin/AdGuardHome"
+          test -x "${roots[0]}/etc/init.d/adguardhome"
+          test -s "${roots[0]}/www/luci-static/resources/view/adguardhome/config.js"
+          grep -qx "[[:space:]]*option enabled '0'" "${roots[0]}/etc/config/adguardhome"
           test -x "${roots[0]}/usr/bin/mosdns"
           test -x "${roots[0]}/usr/bin/geo2txt"
           test -s "${roots[0]}/usr/share/v2ray/geoip.dat"
