@@ -334,7 +334,7 @@ The R66S build enables clients -> AdGuard Home :53 -> local MosDNS :5335.
 AdGuard records original client addresses and filters queries; dnsmasq keeps
 DHCP, LAN names and private PTR lookups on :54. AdGuard's web UI stays on :3000.
 MosDNS owns domain splitting and caching. Domestic queries use AliDNS DoH;
-other queries use a localhost-only OpenClash SOCKS listener on :7894 and foreign
+other queries use OpenClash's default mixed listener on :7893 and foreign
 DoH. Node bootstrap uses a separate direct MosDNS listener on :5336 to avoid a
 DNS/proxy dependency loop. The profile and subscription-independent overwrite
 implementation live in r66s-packages; the upstream OpenWrt DNS packages are

@@ -315,7 +315,7 @@ jobs:
             abort "MosDNS API must stay local" unless c.dig("api", "http") == "127.0.0.1:9091"
             %w[main_udp main_tcp].each { |k| abort "Bad business DNS listener" unless p[k].dig("args", "listen") == "127.0.0.1:5335" }
             %w[bootstrap_udp bootstrap_tcp].each { |k| abort "Bad bootstrap listener" unless p[k].dig("args", "listen") == "127.0.0.1:5336" }
-            p["forward_remote"].dig("args", "upstreams").each { |u| abort "Remote DNS must use local proxy" unless u["socks5"] == "127.0.0.1:7894" }
+            p["forward_remote"].dig("args", "upstreams").each { |u| abort "Remote DNS must use OpenClash mixed port" unless u["socks5"] == "127.0.0.1:7893" }
             p["forward_domestic"].dig("args", "upstreams").each { |u| abort "Bootstrap must not depend on proxy" if u.key?("socks5") }
           ' "${roots[0]}/etc/mosdns/config_custom.yaml"
           dns_probe=$(mktemp "$RUNNER_TEMP/r66s-dns.XXXXXX")
@@ -326,7 +326,8 @@ jobs:
             abort "Business DNS bypasses MosDNS" unless c.dig("dns", "nameserver") == ["127.0.0.1:5335"]
             abort "Node DNS has a circular dependency" unless c.dig("dns", "proxy-server-nameserver") == ["127.0.0.1:5336"]
             abort "Unsafe sniffing" unless c.dig("sniffer", "enable") && c.dig("sniffer", "override-destination") == false
-            abort "Missing DNS proxy" unless c.fetch("listeners").any? { |l| l["port"] == 7894 && l["listen"] == "127.0.0.1" && l["proxy"] == "R66S-DNS" }
+            abort "R66S must not add a legacy DNS listener" if c.fetch("listeners", []).any? { |l| l["name"] == "r66s-dns-proxy" }
+            abort "Proxy authentication must be disabled" if c.key?("authentication")
             abort "TUN must not steal client DNS" if c["tun"].is_a?(Hash) && c["tun"]["dns-hijack"] != []
             group = c.fetch("proxy-groups").find { |g| g["name"] == "R66S-DNS" }
             abort "DNS group needs startup health checks" unless group && group["lazy"] == false && group["exclude-filter"]
