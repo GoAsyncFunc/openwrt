@@ -50,6 +50,19 @@ fails before Linux, capture serial output before changing the boot chain.
 
 ## Build
 
+The firmware also bundles Honk (`honk` and `luci-app-honk`), including its
+Chinese translation and Doona panel, through the existing `r66s-packages`
+preparation step. Its pinned recipes download verified ARM64 core/UI assets.
+Kernel debug/BTF information, cgroup BPF and network namespaces are enabled;
+the artifact checks verify the kernel's `.BTF` section as well as the app files.
+This changes the kernel configuration, so previously built kernel module APKs
+must not be mixed with this image.
+
+Honk remains disabled and uninitialized until configured in **Services > Honk**.
+Before activating it, stop OpenClash and plan the AdGuard/MosDNS upstream change:
+the current foreign DNS path depends on OpenClash. Bundling the app does not
+migrate that policy. Hardware/eBPF runtime validation remains necessary.
+
 Use the **Build R66S firmware** GitHub Actions workflow at
 `.github/workflows/r66s.yml`. Relevant pushes to the `r66s` branch run it
 automatically. It can also be started from the Actions page with **Run

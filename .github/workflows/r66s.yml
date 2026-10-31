@@ -190,6 +190,16 @@ jobs:
           grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=1024' .config
           grep -qx 'CONFIG_KERNEL_SWAP=y' .config
           grep -qx 'CONFIG_IPV6=y' .config
+          # Honk 的 CO-RE eBPF 依赖内核 BTF；不能只确认 LuCI 包已选中。
+          for option in KERNEL_DEBUG_INFO KERNEL_DEBUG_INFO_BTF KERNEL_CGROUPS KERNEL_CGROUP_BPF KERNEL_NAMESPACES KERNEL_NET_NS; do
+            grep -qx "CONFIG_${option}=y" .config
+          done
+          for package in honk luci-app-honk kmod-sched-core kmod-sched-bpf kmod-nft-queue; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config
+          done
+          for option in enabled initialized; do
+            grep -qx "[[:space:]]*option ${option} '0'" package/openwrt-packages/honk/files/honk.config
+          done
           for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -272,6 +282,22 @@ jobs:
           fi
           roots=(build_dir/target-*/root-rockchip)
           test "${#roots[@]}" -eq 1
+          for package in honk luci-app-honk kmod-sched-core kmod-sched-bpf kmod-nft-queue; do
+            grep -q "^${package} " "$manifest"
+          done
+          test -x "${roots[0]}/usr/bin/honk-core"
+          file "${roots[0]}/usr/bin/honk-core" | grep -q 'ARM aarch64'
+          test -x "${roots[0]}/etc/init.d/honk"
+          test -s "${roots[0]}/usr/share/doona/index.html"
+          test -s "${roots[0]}/usr/lib/lua/luci/i18n/honk.zh-cn.lmo"
+          test -s "${roots[0]}/www/luci-static/resources/view/honk/overview.js"
+          for option in enabled initialized; do
+            grep -qx "[[:space:]]*option ${option} '0'" "${roots[0]}/etc/config/honk"
+          done
+          mapfile -t honk_kernels < <(find build_dir -path '*/linux-rockchip_armv8/linux-*/vmlinux' -type f)
+          test "${#honk_kernels[@]}" -eq 1
+          readelf -SW "${honk_kernels[0]}" > logs/honk-vmlinux-sections.txt
+          grep -q '[[:space:]]\.BTF[[:space:]]' logs/honk-vmlinux-sections.txt
           for package in adguardhome luci-app-adguardhome luci-i18n-adguardhome-zh-cn; do
             grep -q "^${package} " "$manifest"
           done
