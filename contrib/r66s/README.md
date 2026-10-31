@@ -64,9 +64,9 @@ the current foreign DNS path depends on OpenClash. Bundling the app does not
 migrate that policy. Hardware/eBPF runtime validation remains necessary.
 
 Use the **Build R66S firmware** GitHub Actions workflow at
-`.github/workflows/r66s.yml`. Relevant pushes to the `r66s` branch run it
-automatically. It can also be started from the Actions page with **Run
-workflow**, or from the command line:
+`.github/workflows/r66s.yml`. It is manual-only; pushes to `r66s` do not start
+a firmware build. Start it from the Actions page with **Run workflow**, or from
+the command line:
 
 ```sh
 gh workflow run r66s.yml --repo GoAsyncFunc/openwrt --ref r66s

@@ -8,21 +8,6 @@ on:
         default: main
         required: true
         type: string
-  push:
-    branches: [r66s]
-    paths:
-      - '.github/workflows/r66s.yml'
-      - 'config/r66s-lede.config'
-      - 'files/**'
-      - 'contrib/r66s/**'
-      - 'target/linux/rockchip/**'
-      - 'target/linux/generic/**'
-      - 'package/kernel/r8125/**'
-      - 'package/boot/uboot-rockchip/**'
-      - 'package/boot/rkbin/**'
-      - 'include/**'
-      - 'toolchain/**'
-
 permissions:
   contents: read
 
