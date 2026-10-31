@@ -24,6 +24,8 @@ def prepare(bundle, overlay):
         raise ValueError('Missing Honk DNS listener or subscription')
     if 'password_auth: true' not in system or 'allow_anonymous_loopback: false' not in system:
         raise ValueError('Authenticated native API required')
+    if "bootstrap_resolver: '127.0.0.1:5336'" not in system:
+        raise ValueError('Independent node bootstrap DNS required')
     database = gzip.decompress(base64.b64decode(bundle['database'], validate=True))
     if len(database) > 4 * 1024 * 1024:
         raise ValueError('Oversized state database')
@@ -46,6 +48,8 @@ def prepare(bundle, overlay):
     for name in ('config.dae', 'managed-config.dae'):
         write_private(overlay / 'etc/honk' / name, config)
     write_private(overlay / 'etc/honk/system.dae', system)
+    if 'mosdns_whitelist' in bundle:
+        write_private(overlay / 'etc/mosdns/rule/whitelist.txt', bundle['mosdns_whitelist'])
     write_private(overlay / 'etc/honk/state/honk.db', database)
     (overlay / 'etc/honk/state').chmod(0o700)
     write_private(overlay / 'etc/config/honk', """config honk 'main'

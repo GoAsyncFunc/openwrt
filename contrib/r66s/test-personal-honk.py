@@ -22,20 +22,27 @@ class PersonalHonkTest(unittest.TestCase):
                     db.execute(f'INSERT INTO {table} VALUES (?)', ('fixture',))
             bundle = {
                 'config': "dns {\n bind: 'tcp+udp://127.0.0.1:5353'\n}\nsubscription {\n}\n",
-                'system': 'password_auth: true\nallow_anonymous_loopback: false\n',
+                'system': "password_auth: true\nallow_anonymous_loopback: false\nbootstrap_resolver: '127.0.0.1:5336'\n",
+                'mosdns_whitelist': 'domain:example.net\n',
                 'database': base64.b64encode(gzip.compress((root / 'state.db').read_bytes())).decode(),
             }
             module.prepare(bundle, root / 'files')
             state = root / 'files/etc/honk/state/honk.db'
             self.assertEqual(state.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((root / 'files/etc/mosdns/rule/whitelist.txt').read_text(),
+                             'domain:example.net\n')
             with sqlite3.connect(state) as db:
                 self.assertEqual(db.execute('SELECT count(*) FROM admin').fetchone()[0], 1)
                 self.assertEqual(db.execute('SELECT count(*) FROM subscription_body').fetchone()[0], 1)
                 self.assertEqual(db.execute('SELECT count(*) FROM dns_answer').fetchone()[0], 0)
+            original_system = bundle['system']
+            bundle['system'] = original_system.replace("bootstrap_resolver: '127.0.0.1:5336'", '')
+            with self.assertRaises(ValueError):
+                module.prepare(bundle, root / 'rejected')
             bundle['system'] = 'password_auth: false'
             with self.assertRaises(ValueError):
                 module.prepare(bundle, root / 'rejected')
-            bundle['system'] = 'password_auth: true\nallow_anonymous_loopback: false'
+            bundle['system'] = "password_auth: true\nallow_anonymous_loopback: false\nbootstrap_resolver: '127.0.0.1:5336'"
             bundle['database'] = base64.b64encode(gzip.compress(b'broken SQLite')).decode()
             with self.assertRaises(sqlite3.DatabaseError):
                 module.prepare(bundle, root / 'rejected')

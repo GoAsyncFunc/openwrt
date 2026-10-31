@@ -187,6 +187,8 @@ jobs:
           done
           python3 contrib/r66s/test-personal-honk.py
           grep -Fq "bind: 'tcp+udp://127.0.0.1:5353'" package/openwrt-packages/honk/files/config.dae
+          grep -Fq 'dport(53) -> direct(must)' package/openwrt-packages/honk/files/config.dae
+          grep -Fq "bootstrap_resolver: '127.0.0.1:5336'" package/openwrt-packages/honk/files/system.dae
           for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
