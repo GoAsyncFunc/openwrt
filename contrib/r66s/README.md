@@ -1,5 +1,21 @@
 # R66S: official OpenWrt with LEDE hardware adaptations
 
+## Current default proxy and DNS stack (2026-11-01)
+
+Honk is the primary proxy. OpenClash, its core and existing integration remain
+installed but disabled, including automatic subscription updates. AdGuard Home
+owns port 53; MosDNS on loopback 5335 sends foreign queries to Honk on 5353.
+dnsmasq on 54 keeps DHCP/local names; bootstrap DNS on 5336 is independent.
+
+Generic firmware contains no Honk account or personal subscription. It provides
+direct DoH until Honk initialization. The private preconfigured workflow in
+`GoAsyncFunc/openwrt-actions` uses `prepare-personal-honk.py` to add an initialized
+account and cached subscriptions to a disposable repack container, producing a
+private firmware artifact without writing personal state to Git or GHCR.
+Honk failure after initialization does not silently fall back to direct DNS.
+Both firmware workflows remain manual-only. The older OpenClash sections below
+describe the retained integration, not the current default service.
+
 ## Source baselines
 
 - Destination: `goasyncfunc/openwrt`, based on OpenWrt

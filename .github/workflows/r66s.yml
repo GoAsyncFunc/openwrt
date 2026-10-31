@@ -185,6 +185,8 @@ jobs:
           for option in enabled initialized; do
             grep -qx "[[:space:]]*option ${option} '0'" package/openwrt-packages/honk/files/honk.config
           done
+          python3 contrib/r66s/test-personal-honk.py
+          grep -Fq "bind: 'tcp+udp://127.0.0.1:5353'" package/openwrt-packages/honk/files/config.dae
           for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -273,6 +275,7 @@ jobs:
           test -x "${roots[0]}/usr/bin/honk-core"
           file "${roots[0]}/usr/bin/honk-core" | grep -q 'ARM aarch64'
           test -x "${roots[0]}/etc/init.d/honk"
+          grep -Fq "bind: 'tcp+udp://127.0.0.1:5353'" "${roots[0]}/etc/honk/config.dae"
           test -s "${roots[0]}/usr/share/doona/index.html"
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/honk.zh-cn.lmo"
           test -s "${roots[0]}/www/luci-static/resources/view/honk/overview.js"
@@ -326,7 +329,7 @@ jobs:
             abort "MosDNS API must stay local" unless c.dig("api", "http") == "127.0.0.1:9091"
             %w[main_udp main_tcp].each { |k| abort "Bad business DNS listener" unless p[k].dig("args", "listen") == "127.0.0.1:5335" }
             %w[bootstrap_udp bootstrap_tcp].each { |k| abort "Bad bootstrap listener" unless p[k].dig("args", "listen") == "127.0.0.1:5336" }
-            p["forward_remote"].dig("args", "upstreams").each { |u| abort "Remote DNS must use OpenClash mixed port" unless u["socks5"] == "127.0.0.1:7893" }
+            abort "Remote DNS must use Honk" unless p["forward_remote"].dig("args", "upstreams") == [{"tag" => "honk_dns", "addr" => "udp://127.0.0.1:5353"}]
             p["forward_domestic"].dig("args", "upstreams").each { |u| abort "Bootstrap must not depend on proxy" if u.key?("socks5") }
           ' "${roots[0]}/etc/mosdns/config_custom.yaml"
           dns_probe=$(mktemp "$RUNNER_TEMP/r66s-dns.XXXXXX")
@@ -350,7 +353,7 @@ jobs:
           grep -Fq "config_subscribe 'nomorewalls'" "${roots[0]}/etc/config/openclash"
           grep -Fq "option address 'https://raw.githubusercontent.com/GoAsyncFunc/r66s-packages/refs/heads/main/nomorewalls.yaml?token=" "${roots[0]}/etc/config/openclash"
           grep -Fq "option sub_ua 'clash-verge/v2.4.5'" "${roots[0]}/etc/config/openclash"
-          grep -Fq "option auto_update '1'" "${roots[0]}/etc/config/openclash"
+          grep -Fq "option auto_update '0'" "${roots[0]}/etc/config/openclash"
           grep -Fq "option config_path '/etc/openclash/config/nomorewalls.yaml'" "${roots[0]}/etc/config/openclash"
           cmp target/linux/rockchip/armv8/base-files/etc/board.d/02_network "${roots[0]}/etc/board.d/02_network"
           for setting in "ipv6_enable '1'" "ipv6_dns '1'" "ipv6_mode '0'" "enable_v6_udp_proxy '1'"; do
@@ -361,8 +364,9 @@ jobs:
           test -s "${roots[0]}/etc/openclash/GeoIP.dat"
           # 覆写模块必须保持出厂关闭：误开启会生成核心无法解析的规则，
           # OpenClash 因此启动失败并把总开关复位成 0，开箱即用就不成立。
-          test "$(grep -c "option enable '1'" "${roots[0]}/etc/config/openclash")" -eq 1
-          test "$(grep -c "option enable '0'" "${roots[0]}/etc/config/openclash")" -eq 4
+          test "$(grep -c "option enable '1'" "${roots[0]}/etc/config/openclash" || true)" -eq 0
+          test "$(grep -c "option enable '0'" "${roots[0]}/etc/config/openclash")" -eq 5
+          grep -Fq '/etc/init.d/openclash disable' "${roots[0]}/etc/uci-defaults/98-r66s-openclash"
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/openclash.zh-cn.lmo"
           file "${roots[0]}/etc/openclash/core/clash_meta" | grep -q 'ARM aarch64'
           grep -Fq 'lan) ipad=${ipaddr:-"192.168.77.1"}' "${roots[0]}/bin/config_generate"
