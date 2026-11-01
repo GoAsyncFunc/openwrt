@@ -2,6 +2,7 @@
 
 #include <linux/bitfield.h>
 #include <linux/delay.h>
+#include <linux/jiffies.h>
 #include <linux/mdio.h>
 #include <linux/mfd/syscon.h>
 #include <linux/of.h>
@@ -13,9 +14,19 @@
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+#include <linux/workqueue.h>
 
 #define RTPCS_SDS_CNT				14
 #define RTPCS_MAX_LINKS_PER_SDS			8
+#define RTPCS_RXCAL_START_MS			1000
+#define RTPCS_RXCAL_POLL_MS			500
+#define RTPCS_RXCAL_MAX_TRIES			3
+#define RTPCS_RXCAL_RETRY_MS			1000
+#define RTPCS_RXCAL_XSG_MAX_ERR_DELTA		100
+#define RTPCS_RXCAL_XSG_ERR_SATURATION		0xffff00
+#define RTPCS_RXMON_POLL_MS			500
+#define RTPCS_RXMON_DOWN_SAMPLES			3
+#define RTPCS_RXMON_RECOVERY_MS			30000
 
 #define RTPCS_SPEED_10				0
 #define RTPCS_SPEED_100				1
@@ -179,6 +190,9 @@ enum rtpcs_page {
 #define SDS_EXT_REG03			0x03
 #define  RTL838X_REG_CML_SEL		BIT(1)
 
+#define SDS_EXT_REG29			0x1d
+#define  RTL930X_XSG_LINK_STS		GENMASK(8, 0)
+
 /* PAGE_FIB_EXT */
 
 #define FIB_EXT_REG19			0x13
@@ -283,7 +297,7 @@ enum rtpcs_page {
 #define  RTL93XX_DBGO_SEL_0		GENMASK(15, 0)
 #define   RTL930X_DBGO_SEL_0_RXEQ_EVEN_LANE	0x2f
 #define   RTL930X_DBGO_SEL_0_RXEQ_ODD_LANE	0x31
-#define   RTL930X_DBGO_SEL_0_RX_STATUS		0x35
+#define   RTL93XX_DBGO_SEL_0_RX_STATUS		0x35
 #define   RTL931X_DBGO_SEL_0_RXEQ_EVEN_LANE	0x4b
 #define   RTL931X_DBGO_SEL_0_RXEQ_ODD_LANE	0x4c
 
@@ -339,6 +353,13 @@ enum rtpcs_page {
 #define ANA_SPD_REG13			0x0d
 #define  RTL931X_RXEQ_LEQ_MANUAL_EN	BIT(7)
 #define  RTL931X_RXEQ_LEQ_INIT		GENMASK(6, 2)
+
+#define ANA_SPD_REG14			0x0e
+/* Undocumented; RX calibration selection is inferred from SDK use on PAGE_ANA_10G. */
+#define  RTL931X_RXCAL_SEL		GENMASK(13, 11)
+#define   RTL931X_RXCAL_SEL_DEFAULT	FIELD_PREP(RTL931X_RXCAL_SEL, 0x0)
+#define   RTL931X_RXCAL_SEL_FIBER		FIELD_PREP(RTL931X_RXCAL_SEL, 0x1)
+#define   RTL931X_RXCAL_SEL_DAC		FIELD_PREP(RTL931X_RXCAL_SEL, 0x2)
 
 #define ANA_SPD_REG15			0x0f
 #define  RTL930X_LOAD_IN_INIT_ALL	GENMASK(13, 7) /* Includes undocumented bit 12. */
@@ -545,6 +566,13 @@ struct rtpcs_serdes {
 	u8 id;
 	u8 num_of_links;
 	bool first_start;
+	struct delayed_work cali_work;
+	bool rxcal_pending;
+	u8 rxcal_tries;
+	struct delayed_work linkmon_work;
+	bool rxmon_active;
+	u8 rxmon_down;
+	u64 rxmon_recovery_after;
 };
 
 struct rtpcs_ctrl {
@@ -1531,18 +1559,46 @@ static const s16 rtpcs_93xx_sds_hw_mode_vals[RTPCS_SDS_MODE_MAX] = {
 	[RTPCS_SDS_MODE_USXGMII]		= RTPCS_93XX_SDS_MODE_USXGMII,
 };
 
-static bool rtpcs_93xx_sds_10gr_link_up(struct rtpcs_serdes *sds)
+static int rtpcs_93xx_sds_rxcal_ready(struct rtpcs_serdes *sds)
+{
+	struct rtpcs_serdes *even_sds = rtpcs_sds_get_even(sds);
+	int bit, ret;
+
+	switch (sds->hw_mode) {
+	case RTPCS_SDS_MODE_10GBASER:
+	case RTPCS_SDS_MODE_USXGMII:
+	case RTPCS_SDS_MODE_XSGMII:
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	bit = sds == even_sds ? 0 : 1;
+	ret = rtpcs_sds_write_mask(even_sds, PAGE_WDIG, WDIG_REG02,
+				   RTL93XX_DBGO_SEL_0, RTL93XX_DBGO_SEL_0_RX_STATUS);
+	if (ret < 0)
+		return ret;
+
+	ret = rtpcs_sds_read_bits(even_sds, PAGE_WDIG, WDIG_REG20, bit, bit);
+	if (ret < 0)
+		return ret;
+	dev_dbg(sds->ctrl->dev, "SerDes %u: RX readiness: mode=%u RX_IDLE=%d (%s)\n",
+		sds->id, sds->hw_mode, ret, ret ? "waiting" : "ready");
+	return !ret;
+}
+
+static int rtpcs_93xx_sds_10gr_link_status(struct rtpcs_serdes *sds)
 {
 	int link;
 
 	/* Link status may be latched low; the second read is current state. */
 	link = rtpcs_sds_read(sds, PAGE_TGR_STD_1, TGR_STD_1_REG00);
 	if (link < 0)
-		return false;
+		return link;
 
 	link = rtpcs_sds_read(sds, PAGE_TGR_STD_1, TGR_STD_1_REG00);
 	if (link < 0)
-		return false;
+		return link;
 
 	return (link & RTL93XX_10GBASE_R_T_RX_LINK) == RTL93XX_10GBASE_R_T_RX_LINK;
 }
@@ -2029,6 +2085,49 @@ static int rtpcs_930x_sds_get_phys_sds_id(int sds_id, int page)
 	return sds_id;
 }
 
+/* Caller holds ctrl->lock to serialize mode changes and SerDes access. */
+static bool rtpcs_930x_sds_rx_link_up(struct rtpcs_serdes *sds)
+{
+	int phys_sds_id, val, i;
+
+	switch (sds->hw_mode) {
+	case RTPCS_SDS_MODE_10GBASER:
+	case RTPCS_SDS_MODE_USXGMII:
+		val = rtpcs_93xx_sds_10gr_link_status(sds);
+		if (val < 0) {
+			dev_err(sds->ctrl->dev, "SerDes %u: RX link-status read failed: %d\n",
+				sds->id, val);
+			return false;
+		}
+		return val > 0;
+
+	case RTPCS_SDS_MODE_XSGMII:
+		if (sds->id != 2 && sds->id != 3)
+			return false;
+
+		phys_sds_id = rtpcs_930x_sds_get_phys_sds_id(sds->id, PAGE_SDS_EXT);
+
+		for (i = 0; i < 2; i++) {
+			val = __rtpcs_sds_read_raw(sds->ctrl, phys_sds_id + i,
+						  PAGE_SDS_EXT, SDS_EXT_REG29, 15, 0);
+			if (val < 0) {
+				dev_err(sds->ctrl->dev,
+					"SerDes %u: RX link-status read failed on backing SerDes %d: %d\n",
+					sds->id, phys_sds_id + i, val);
+				return false;
+			}
+
+			if ((val & RTL930X_XSG_LINK_STS) != RTL930X_XSG_LINK_STS)
+				return false;
+		}
+
+		return true;
+
+	default:
+		return false;
+	}
+}
+
 static int rtpcs_930x_sds_op_read(struct rtpcs_serdes *sds, enum rtpcs_page page, int regnum,
 				  int bithigh, int bitlow)
 {
@@ -2164,7 +2263,7 @@ static int rtpcs_930x_sds_wait_clock_ready(struct rtpcs_serdes *sds)
 		usleep_range(10000, 15000);
 
 		ret = rtpcs_sds_write_mask(even_sds, PAGE_WDIG, WDIG_REG02,
-					   RTL93XX_DBGO_SEL_0, RTL930X_DBGO_SEL_0_RX_STATUS);
+					   RTL93XX_DBGO_SEL_0, RTL93XX_DBGO_SEL_0_RX_STATUS);
 		if (ret)
 			return ret;
 
@@ -2204,7 +2303,7 @@ static void rtpcs_930x_sds_reset_state_machine(struct rtpcs_serdes *sds)
 static int rtpcs_930x_sds_init_state_machine(struct rtpcs_serdes *sds,
 					     enum rtpcs_sds_mode hw_mode)
 {
-	int loopback, cnt = 20, ret;
+	int link, loopback, cnt = 20, ret;
 
 	if (hw_mode != RTPCS_SDS_MODE_10GBASER)
 		return 0;
@@ -2225,7 +2324,12 @@ static int rtpcs_930x_sds_init_state_machine(struct rtpcs_serdes *sds,
 	while (cnt-- && ret) {
 		rtpcs_930x_sds_reset_state_machine(sds);
 
-		if (rtpcs_93xx_sds_10gr_link_up(sds))
+		link = rtpcs_93xx_sds_10gr_link_status(sds);
+		if (link < 0) {
+			ret = link;
+			break;
+		}
+		if (link)
 			ret = 0;
 	}
 
@@ -2255,7 +2359,8 @@ static int rtpcs_930x_sds_set_mode(struct rtpcs_serdes *sds, enum rtpcs_sds_mode
 	if (ret)
 		return ret;
 
-	if (hw_mode != RTPCS_SDS_MODE_OFF && rtpcs_930x_sds_wait_clock_ready(sds))
+	if (sds->type == RTPCS_SDS_TYPE_10G && hw_mode != RTPCS_SDS_MODE_OFF &&
+	    rtpcs_930x_sds_wait_clock_ready(sds))
 		dev_err(sds->ctrl->dev, "SerDes %d could not sync clock\n", sds->id);
 
 	if (rtpcs_930x_sds_init_state_machine(sds, hw_mode))
@@ -2908,31 +3013,6 @@ static void rtpcs_930x_sds_rxeq_dfe_disable(struct rtpcs_serdes *sds)
 	usleep_range(10000, 11000);
 }
 
-static void rtpcs_930x_sds_do_rx_calibration(struct rtpcs_serdes *sds,
-					     enum rtpcs_sds_mode hw_mode)
-{
-	u32 latch_sts;
-
-	rtpcs_930x_sds_rxcal_init(sds, hw_mode);
-	rtpcs_930x_sds_rxcal_fgcal(sds);
-	rtpcs_930x_sds_rxcal_vth_tap0_adapt_lock(sds);
-
-	/* Do this only for 10GR mode */
-	if (hw_mode == RTPCS_SDS_MODE_10GBASER) {
-		rtpcs_930x_sds_rxeq_dfe_taps_adapt(sds);
-		msleep(20);
-
-		latch_sts = rtpcs_sds_read_bits(sds, PAGE_TGR_STD_0, 1, 2, 2);
-		usleep_range(1000, 2000);
-		latch_sts = rtpcs_sds_read_bits(sds, PAGE_TGR_STD_0, 1, 2, 2);
-		if (latch_sts) {
-			rtpcs_930x_sds_rxeq_dfe_disable(sds);
-			rtpcs_930x_sds_rxcal_vth_tap0_adapt_lock(sds);
-			rtpcs_930x_sds_rxeq_dfe_taps_adapt(sds);
-		}
-	}
-}
-
 static int rtpcs_930x_sds_sym_err_reset(struct rtpcs_serdes *sds,
 					enum rtpcs_sds_mode hw_mode)
 {
@@ -3024,18 +3104,30 @@ static int rtpcs_930x_sds_check_calibration(struct rtpcs_serdes *sds,
 	usleep_range(1000, 2000);
 	errors2 = rtpcs_930x_sds_sym_err_get(sds, hw_mode);
 
+	dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration symbol errors %u -> %u\n",
+		sds->id, errors1, errors2);
+
+	if (!rtpcs_930x_sds_rx_link_up(sds)) {
+		dev_dbg(sds->ctrl->dev, "SerDes %u: RX link down after calibration (mode=%u, attempt=%u/%u)\n",
+			sds->id, hw_mode, sds->rxcal_tries, RTPCS_RXCAL_MAX_TRIES);
+		return 1;
+	}
+
 	switch (hw_mode) {
 	case RTPCS_SDS_MODE_XSGMII:
-		if ((errors2 - errors1 > 100) || (errors1 >= 0xffff00) || (errors2 >= 0xffff00)) {
-			dev_err(sds->ctrl->dev, "SerDes %u: XSGMII error rate too high\n",
-				sds->id);
+		if ((errors2 - errors1 > RTPCS_RXCAL_XSG_MAX_ERR_DELTA) ||
+		    (errors1 >= RTPCS_RXCAL_XSG_ERR_SATURATION) ||
+		    (errors2 >= RTPCS_RXCAL_XSG_ERR_SATURATION)) {
+			dev_dbg(sds->ctrl->dev, "SerDes %u: XSGMII errors %u -> %u, delta=%u (max %u), saturation=%#x\n",
+				sds->id, errors1, errors2, errors2 - errors1,
+				RTPCS_RXCAL_XSG_MAX_ERR_DELTA, RTPCS_RXCAL_XSG_ERR_SATURATION);
 			return 1;
 		}
 		break;
 	default:
 		if (errors2 > 0) {
-			dev_err(sds->ctrl->dev, "SerDes %u: symbol error rate too high\n",
-				sds->id);
+			dev_dbg(sds->ctrl->dev, "SerDes %u: symbol errors %u (expected 0)\n",
+				sds->id, errors2);
 			return 1;
 		}
 		break;
@@ -3044,27 +3136,112 @@ static int rtpcs_930x_sds_check_calibration(struct rtpcs_serdes *sds,
 	return 0;
 }
 
-static int rtpcs_930x_sds_10g_idle(struct rtpcs_serdes *sds)
+static void rtpcs_930x_rx_cali_work_handler(struct work_struct *work)
 {
-	struct rtpcs_serdes *even_sds = rtpcs_sds_get_even(sds);
-	ktime_t timeout;
-	int bit, busy;
+	unsigned long lock_start, attempt_start;
+	struct rtpcs_serdes *sds;
+	int latch_sts, ret;
+	bool calib_failed;
 
-	bit = (sds == even_sds) ? 0 : 1;
-	timeout = ktime_add_us(ktime_get(), 10000); /* timeout after 10 msecs */
+	sds = container_of(to_delayed_work(work), struct rtpcs_serdes, cali_work);
 
-	do {
-		rtpcs_sds_write_mask(even_sds, PAGE_WDIG, WDIG_REG02, RTL93XX_DBGO_SEL_0,
-				     RTL930X_DBGO_SEL_0_RX_STATUS);
-		busy = rtpcs_sds_read_bits(even_sds, PAGE_WDIG, 0x14, bit, bit);
-		if (busy <= 0)
-			return busy;
+	lock_start = jiffies;
+	mutex_lock(&sds->ctrl->lock);
 
-		usleep_range(100, 200); /* wait ~100 usecs before retry */
-	} while (ktime_before(ktime_get(), timeout));
+	dev_dbg(sds->ctrl->dev,
+		"SerDes %u: RX calibration worker entered, mode=%u pending=%u lock-wait=%u ms\n",
+		sds->id, sds->hw_mode, sds->rxcal_pending,
+		jiffies_to_msecs(jiffies - lock_start));
 
-	dev_warn(sds->ctrl->dev, "SerDes %u: waiting for RX idle timed out\n", sds->id);
-	return -ETIMEDOUT;
+	if (!sds->rxcal_pending) {
+		dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration request no longer pending\n",
+			sds->id);
+		goto unlock;
+	}
+
+	ret = rtpcs_93xx_sds_rxcal_ready(sds);
+	if (ret < 0) {
+		dev_err(sds->ctrl->dev, "SerDes %u: RX calibration readiness check failed: %d\n",
+			sds->id, ret);
+		goto terminate;
+	}
+
+	if (!ret) {
+		dev_dbg(sds->ctrl->dev, "SerDes %u: RX not ready for calibration, checking again in %u ms\n",
+			sds->id, RTPCS_RXCAL_POLL_MS);
+		schedule_delayed_work(&sds->cali_work, msecs_to_jiffies(RTPCS_RXCAL_POLL_MS));
+		goto unlock;
+	}
+
+	attempt_start = jiffies;
+	sds->rxcal_tries++;
+	dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration attempt %u/%u\n",
+		sds->id, sds->rxcal_tries, RTPCS_RXCAL_MAX_TRIES);
+	rtpcs_930x_sds_rxcal_init(sds, sds->hw_mode);
+	rtpcs_930x_sds_rxcal_fgcal(sds);
+	rtpcs_930x_sds_rxcal_vth_tap0_adapt_lock(sds);
+
+	if (sds->hw_mode == RTPCS_SDS_MODE_10GBASER) {
+		rtpcs_930x_sds_rxeq_dfe_taps_adapt(sds);
+		msleep(20);
+
+		latch_sts = rtpcs_sds_read_bits(sds, PAGE_TGR_STD_0, 1, 2, 2);
+		if (latch_sts >= 0) {
+			usleep_range(1000, 2000);
+			latch_sts = rtpcs_sds_read_bits(sds, PAGE_TGR_STD_0, 1, 2, 2);
+		}
+		if (latch_sts < 0) {
+			dev_err(sds->ctrl->dev, "SerDes %u: RX latch read failed: %d\n",
+				sds->id, latch_sts);
+			goto terminate;
+		}
+		if (latch_sts) {
+			dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration repeating VTH/TAP0 adaptation\n",
+				sds->id);
+			rtpcs_930x_sds_rxeq_dfe_disable(sds);
+			rtpcs_930x_sds_rxcal_vth_tap0_adapt_lock(sds);
+			rtpcs_930x_sds_rxeq_dfe_taps_adapt(sds);
+		}
+	}
+
+	msleep(50);
+	calib_failed = rtpcs_930x_sds_check_calibration(sds, sds->hw_mode);
+	dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration attempt %u/%u %s after %u ms\n",
+		sds->id, sds->rxcal_tries, RTPCS_RXCAL_MAX_TRIES,
+		calib_failed ? "failed" : "passed",
+		jiffies_to_msecs(jiffies - attempt_start));
+	if (calib_failed) {
+		if (sds->rxcal_tries < RTPCS_RXCAL_MAX_TRIES) {
+			dev_dbg(sds->ctrl->dev, "SerDes %u: retrying RX calibration in %u ms\n",
+				sds->id, RTPCS_RXCAL_RETRY_MS);
+			schedule_delayed_work(&sds->cali_work,
+					      msecs_to_jiffies(RTPCS_RXCAL_RETRY_MS));
+			goto unlock;
+		}
+		dev_warn(sds->ctrl->dev, "SerDes %u: RX calibration did not pass after %u attempts\n",
+			 sds->id, sds->rxcal_tries);
+	}
+
+terminate:
+	sds->rxcal_pending = false;
+unlock:
+	mutex_unlock(&sds->ctrl->lock);
+}
+
+static void rtpcs_sds_cancel_rx_work(void *data)
+{
+	struct rtpcs_serdes *sds = data;
+
+	scoped_guard(mutex, &sds->ctrl->lock) {
+		sds->rxcal_pending = false;
+		sds->rxmon_active = false;
+	}
+
+	/* Unused work items remain zeroed in the SerDes allocation. */
+	if (sds->cali_work.work.func)
+		cancel_delayed_work_sync(&sds->cali_work);
+	if (sds->linkmon_work.work.func)
+		cancel_delayed_work_sync(&sds->linkmon_work);
 }
 
 static int rtpcs_930x_sds_config_polarity(struct rtpcs_serdes *sds, unsigned int tx_pol,
@@ -3333,24 +3510,18 @@ static int rtpcs_930x_sds_config_attachment(struct rtpcs_serdes *sds,
 
 static int rtpcs_930x_sds_post_config(struct rtpcs_serdes *sds, enum rtpcs_sds_mode hw_mode)
 {
-	bool calib_failed;
-	int calib_tries = 0;
-
 	if (hw_mode != RTPCS_SDS_MODE_10GBASER &&
 	    hw_mode != RTPCS_SDS_MODE_XSGMII &&
 	    hw_mode != RTPCS_SDS_MODE_USXGMII)
 		return 0;
 
-	rtpcs_930x_sds_10g_idle(sds);
-	do {
-		rtpcs_930x_sds_do_rx_calibration(sds, hw_mode);
-		calib_tries++;
-		msleep(50);
-		calib_failed = rtpcs_930x_sds_check_calibration(sds, hw_mode);
-	} while (calib_failed && calib_tries < 3);
-	if (calib_failed)
-		dev_warn(sds->ctrl->dev, "SerDes %u: RX calibration failed\n", sds->id);
+	rtpcs_930x_sds_rxcal_init(sds, hw_mode);
 
+	dev_dbg(sds->ctrl->dev, "SerDes %u: arming RX calibration for mode %u\n",
+		sds->id, hw_mode);
+	sds->rxcal_tries = 0;
+	sds->rxcal_pending = true;
+	mod_delayed_work(system_wq, &sds->cali_work, msecs_to_jiffies(RTPCS_RXCAL_START_MS));
 	return 0;
 }
 
@@ -3382,7 +3553,9 @@ static int rtpcs_930x_sds_probe(struct rtpcs_serdes *sds)
 			return PTR_ERR(sds->swcore_regs.usxgmii_submode);
 	}
 
-	return 0;
+	INIT_DELAYED_WORK(&sds->cali_work, rtpcs_930x_rx_cali_work_handler);
+
+	return devm_add_action_or_reset(dev, rtpcs_sds_cancel_rx_work, sds);
 }
 
 /* RTL931X */
@@ -3517,6 +3690,7 @@ static int rtpcs_931x_sds_rxeq_leq_get_coef(struct rtpcs_serdes *sds)
 	ret = rtpcs_931x_sds_rxeq_set_debug(sds, RTL931X_RX_DEBUG_SEL_LEQ);
 	if (ret < 0)
 		return ret;
+	usleep_range(1000, 2000);
 
 	gray = rtpcs_sds_read(sds, PAGE_WDIG, WDIG_REG20);
 	if (gray < 0)
@@ -3626,6 +3800,7 @@ static int rtpcs_931x_sds_rxeq_vth_get(struct rtpcs_serdes *sds, unsigned int *v
  * Reset both LEQ and DFE in the RX path to baseline configuration. I.e.
  * sets LEQ and DFE to manual mode and sets certain values (mostly 0) for
  * LEQ and DFE coefficients/parameters.
+ * Also restore the default RX calibration selection.
  *
  * LEQ and DFE can run in two modes:
  * * manual: specific values are set and used
@@ -3634,6 +3809,9 @@ static int rtpcs_931x_sds_rxeq_vth_get(struct rtpcs_serdes *sds, unsigned int *v
  */
 static int rtpcs_931x_sds_reset_leq_dfe(struct rtpcs_serdes *sds)
 {
+	rtpcs_sds_write_mask(sds, PAGE_ANA_10G, ANA_SPD_REG14,
+			     RTL931X_RXCAL_SEL, RTL931X_RXCAL_SEL_DEFAULT);
+
 	rtpcs_931x_sds_rxeq_leq_set_adapt(sds, false);
 	rtpcs_931x_sds_rxeq_leq_set_coef(sds, 0);
 	/* bits [1:0] are undocumented but part of the known-good reset value */
@@ -3795,10 +3973,8 @@ static void rtpcs_931x_sds_rx_reset(struct rtpcs_serdes *sds)
  * equalization, so this only resets LEQ and releases it back into
  * auto-adapt. No TAP/VTH involvement.
  */
-static void rtpcs_931x_sds_rxcal_leq_adapt(struct rtpcs_serdes *sds)
+static int rtpcs_931x_sds_rxcal_leq_adapt(struct rtpcs_serdes *sds)
 {
-	dev_dbg(sds->ctrl->dev, "SerDes %u PHY-attached RX calibration...\n", sds->id);
-
 	rtpcs_931x_sds_rxeq_leq_set_coef(sds, 0);
 	rtpcs_sds_write_bits(sds, PAGE_ANA_10G, ANA_SPD_REG13, 1, 0, 0x0);   /* undocumented */
 	rtpcs_sds_write_bits(sds, PAGE_ANA_10G, ANA_SPD_REG13, 13, 13, 0x0); /* undocumented */
@@ -3812,6 +3988,8 @@ static void rtpcs_931x_sds_rxcal_leq_adapt(struct rtpcs_serdes *sds)
 
 	dev_dbg(sds->ctrl->dev, "SerDes %u LEQ = %#x\n", sds->id,
 		rtpcs_931x_sds_rxeq_leq_get_coef(sds));
+
+	return 0;
 }
 
 /*
@@ -3829,18 +4007,14 @@ static void rtpcs_931x_sds_rxcal_leq_adapt(struct rtpcs_serdes *sds)
  * and tolerate a small nonzero symbol-error count rather than requiring
  * exactly 0.
  */
-static void rtpcs_931x_sds_rxcal_fiber_adapt(struct rtpcs_serdes *sds)
+static int rtpcs_931x_sds_rxcal_fiber_adapt(struct rtpcs_serdes *sds)
 {
 	unsigned int vth_p = 0, vth_n = 0, sum_p = 0, sum_n = 0;
+	int i, link = 0, samples = 0, symerr = -1;
 	struct device *dev = sds->ctrl->dev;
-	int i, samples = 0, symerr = -1;
-	bool link_up = false;
 
-	dev_dbg(dev, "SerDes %u fiber RX calibration...\n", sds->id);
 	/* per-port calibration offset in the SDK, kept 0 here */
 	rtpcs_sds_write_bits(sds, PAGE_ANA_10G, 0xc, 14, 10, 0x0);
-
-	rtpcs_931x_sds_reset_leq_dfe(sds);
 
 	/* let VTH + TAP0 auto-adapt run and settle before sampling/forcing values */
 	rtpcs_931x_sds_rxeq_tap_set_adapt(sds, 0, true);
@@ -3885,28 +4059,33 @@ static void rtpcs_931x_sds_rxcal_fiber_adapt(struct rtpcs_serdes *sds)
 		rtpcs_931x_sds_clear_symerr(sds, RTPCS_SDS_MODE_10GBASER);
 		msleep(300);
 		symerr = rtpcs_931x_sds_fiber_get_symerr(sds, RTPCS_SDS_MODE_10GBASER);
-		link_up = rtpcs_93xx_sds_10gr_link_up(sds);
-		dev_dbg(dev, "SerDes %u symErr check %d: linkUp=%d symErr=0x%x\n", sds->id,
-			i + 1, link_up, symerr);
+		if (symerr < 0) {
+			dev_err(dev, "SerDes %u: RX calibration symbol-error read failed: %d\n",
+				sds->id, symerr);
+			return symerr;
+		}
+		link = rtpcs_93xx_sds_10gr_link_status(sds);
+		if (link < 0) {
+			dev_err(dev, "SerDes %u: RX calibration link-status read failed: %d\n",
+				sds->id, link);
+			return link;
+		}
 
 		/*
 		 * symErr also reads 0 with no signal at all, not just a clean
-		 * link - don't trust it without link_up confirming there's
+		 * link - don't trust it without link confirming there's
 		 * actually something being decoded.
 		 */
-		if (link_up && symerr >= 0 && symerr <= 5) {
-			dev_dbg(dev, "SerDes %u fiber RX calibration OK (check %d)\n",
-				sds->id, i + 1);
-			return;
+		if (link && symerr <= 5) {
+			dev_dbg(dev, "SerDes %u fiber RX calibration OK (check %d, symErr=0x%x)\n",
+				sds->id, i + 1, symerr);
+			return 0;
 		}
 	}
 
-	if (link_up)
-		dev_dbg(dev, "SerDes %u fiber RX calibration: symErr still 0x%x after %d checks, link up anyway\n",
-			sds->id, symerr, i);
-	else
-		dev_warn(dev, "SerDes %u fiber RX calibration failed after %d symErr checks\n",
-			 sds->id, i);
+	dev_warn(dev, "SerDes %u fiber RX calibration failed after %d checks: linkUp=%d symErr=0x%x\n",
+		 sds->id, i, link, symerr);
+	return link ? -EIO : -ENOLINK;
 }
 
 static int rtpcs_931x_sds_get_pll_select(struct rtpcs_serdes *sds, enum rtpcs_sds_pll_type *pll)
@@ -4053,11 +4232,10 @@ static int rtpcs_931x_sds_config_attachment(struct rtpcs_serdes *sds,
 	if (sds->type != RTPCS_SDS_TYPE_10G)
 		return 0;
 
-	rtpcs_sds_write_bits(sds, PAGE_ANA_10G, 0xe, 13, 11, 0x0);
-	if (hw_mode != RTPCS_SDS_MODE_XSGMII)
-		rtpcs_931x_sds_reset_leq_dfe(sds);
+	rtpcs_sds_write_mask(sds, PAGE_ANA_10G, ANA_SPD_REG14,
+			     RTL931X_RXCAL_SEL, RTL931X_RXCAL_SEL_DEFAULT);
 
-	/* SDK: media none behavior - baseline applied regardless of attachment */
+	/* SDK media-none analog setup, applied regardless of attachment. */
 	rtpcs_931x_sds_10g_ana_pre(sds);
 
 	rtpcs_sds_write_mask(sds, PAGE_ANA_MISC, ANA_MISC_REG00, RTL93XX_FRC_CMU_EN,
@@ -4134,33 +4312,152 @@ static int rtpcs_931x_sds_config_attachment(struct rtpcs_serdes *sds,
 				 BIT(sds->id - 2), BIT(sds->id - 2));
 }
 
-/*
- * rtpcs_931x_sds_post_config() - RX calibration, run after power-up.
- *
- * Vendor SDK: _phy_rtl9310_rxCali(). Dispatches by attachment, mirroring
- * the SDK's own split into separate calibration paths per attachment.
- */
+static void rtpcs_931x_rx_cali_work_handler(struct work_struct *work)
+{
+	struct rtpcs_serdes *sds;
+	int ret;
+
+	sds = container_of(to_delayed_work(work), struct rtpcs_serdes, cali_work);
+
+	mutex_lock(&sds->ctrl->lock);
+	if (!sds->rxcal_pending)
+		goto unlock;
+
+	ret = rtpcs_93xx_sds_rxcal_ready(sds);
+	if (ret < 0)
+		dev_err_ratelimited(sds->ctrl->dev, "SerDes %u: RX calibration readiness check failed: %d\n",
+			sds->id, ret);
+	if (ret <= 0) {
+		schedule_delayed_work(&sds->cali_work, msecs_to_jiffies(RTPCS_RXCAL_POLL_MS));
+		goto unlock;
+	}
+
+	sds->rxcal_tries++;
+	if (sds->hw_mode != RTPCS_SDS_MODE_XSGMII)
+		rtpcs_931x_sds_reset_leq_dfe(sds);
+
+	switch (sds->attachment) {
+	case RTPCS_SDS_ATTACH_PHY:
+		ret = rtpcs_931x_sds_rxcal_leq_adapt(sds);
+		break;
+
+	case RTPCS_SDS_ATTACH_FIBER:
+		ret = rtpcs_sds_write_mask(sds, PAGE_ANA_10G, ANA_SPD_REG14,
+					   RTL931X_RXCAL_SEL, RTL931X_RXCAL_SEL_FIBER);
+		if (ret < 0) {
+			dev_err(sds->ctrl->dev, "SerDes %u: RX calibration selection failed: %d\n",
+				sds->id, ret);
+			break;
+		}
+		ret = rtpcs_931x_sds_rxcal_fiber_adapt(sds);
+		break;
+
+	default:
+		sds->rxcal_pending = false;
+		/* TODO: DAC RX calibration */
+		goto unlock;
+	}
+
+	dev_dbg(sds->ctrl->dev, "SerDes %u: RX calibration attempt %u/%u returned %d\n",
+		sds->id, sds->rxcal_tries, RTPCS_RXCAL_MAX_TRIES, ret);
+	if (ret < 0) {
+		if (sds->hw_mode != RTPCS_SDS_MODE_XSGMII)
+			rtpcs_931x_sds_reset_leq_dfe(sds);
+		if (sds->rxcal_tries < RTPCS_RXCAL_MAX_TRIES) {
+			schedule_delayed_work(&sds->cali_work,
+					      msecs_to_jiffies(RTPCS_RXCAL_RETRY_MS));
+			goto unlock;
+		}
+		dev_warn(sds->ctrl->dev, "SerDes %u: RX calibration did not pass after %u attempts: %d\n",
+			 sds->id, sds->rxcal_tries, ret);
+	}
+	sds->rxcal_pending = false;
+	if (sds->hw_mode == RTPCS_SDS_MODE_10GBASER) {
+		sds->rxmon_down = 0;
+		sds->rxmon_active = true;
+		dev_dbg(sds->ctrl->dev, "SerDes %u: RX link monitor armed\n", sds->id);
+		mod_delayed_work(system_wq, &sds->linkmon_work,
+				 msecs_to_jiffies(RTPCS_RXMON_POLL_MS));
+	}
+unlock:
+	mutex_unlock(&sds->ctrl->lock);
+}
+
+/* Apply acquisition defaults and defer calibration until RX is ready. */
 static int rtpcs_931x_sds_post_config(struct rtpcs_serdes *sds, enum rtpcs_sds_mode hw_mode)
 {
 	if (sds->type != RTPCS_SDS_TYPE_10G)
 		return 0;
+	if (hw_mode != RTPCS_SDS_MODE_10GBASER &&
+	    hw_mode != RTPCS_SDS_MODE_XSGMII &&
+	    hw_mode != RTPCS_SDS_MODE_USXGMII)
+		return 0;
 
-	switch (sds->attachment) {
-	case RTPCS_SDS_ATTACH_PHY:
-		rtpcs_931x_sds_rxcal_leq_adapt(sds);
-		break;
+	sds->rxmon_active = false;
+	sds->rxmon_down = 0;
 
-	case RTPCS_SDS_ATTACH_FIBER:
-		if (hw_mode == RTPCS_SDS_MODE_10GBASER)
-			rtpcs_931x_sds_rxcal_fiber_adapt(sds);
-		break;
+	if (hw_mode != RTPCS_SDS_MODE_XSGMII)
+		rtpcs_931x_sds_reset_leq_dfe(sds);
 
-	default:
-		/* TODO: DAC RX calibration */
-		break;
-	}
+	if (sds->attachment != RTPCS_SDS_ATTACH_PHY && hw_mode != RTPCS_SDS_MODE_10GBASER)
+		return 0;
+
+	sds->rxcal_tries = 0;
+	sds->rxcal_pending = true;
+	mod_delayed_work(system_wq, &sds->cali_work, msecs_to_jiffies(RTPCS_RXCAL_START_MS));
 
 	return 0;
+}
+
+static void rtpcs_931x_rx_linkmon_work_handler(struct work_struct *work)
+{
+	struct rtpcs_serdes *sds;
+	int link;
+
+	sds = container_of(to_delayed_work(work), struct rtpcs_serdes, linkmon_work);
+
+	mutex_lock(&sds->ctrl->lock);
+	if (!sds->rxmon_active || sds->rxcal_pending ||
+	    sds->hw_mode != RTPCS_SDS_MODE_10GBASER)
+		goto unlock;
+
+	link = rtpcs_93xx_sds_10gr_link_status(sds);
+	if (link < 0) {
+		sds->rxmon_down = 0;
+		dev_err_ratelimited(sds->ctrl->dev, "SerDes %u: RX link monitor read failed: %d\n",
+			sds->id, link);
+		goto rearm;
+	}
+	if (link) {
+		if (sds->rxmon_down)
+			dev_dbg(sds->ctrl->dev, "SerDes %u: RX link recovered during debounce\n",
+				sds->id);
+		sds->rxmon_down = 0;
+		goto rearm;
+	}
+
+	/* Saturate the debounce count while waiting for the recovery deadline. */
+	if (sds->rxmon_down < RTPCS_RXMON_DOWN_SAMPLES) {
+		sds->rxmon_down++;
+		dev_dbg(sds->ctrl->dev, "SerDes %u: RX link down, sample %u/%u\n",
+			sds->id, sds->rxmon_down, RTPCS_RXMON_DOWN_SAMPLES);
+	}
+	if (sds->rxmon_down < RTPCS_RXMON_DOWN_SAMPLES ||
+	    time_before64(get_jiffies_64(), sds->rxmon_recovery_after))
+		goto rearm;
+
+	dev_dbg(sds->ctrl->dev,
+		"SerDes %u: RX link loss confirmed; restoring baseline and rearming calibration\n",
+		sds->id);
+	rtpcs_931x_sds_post_config(sds, sds->hw_mode);
+	sds->rxmon_recovery_after = get_jiffies_64() +
+				    msecs_to_jiffies(RTPCS_RXMON_RECOVERY_MS);
+	goto unlock;
+
+rearm:
+	schedule_delayed_work(&sds->linkmon_work, msecs_to_jiffies(RTPCS_RXMON_POLL_MS));
+unlock:
+	mutex_unlock(&sds->ctrl->lock);
 }
 
 static int rtpcs_931x_sds_config_hw_mode(struct rtpcs_serdes *sds,
@@ -4246,6 +4543,7 @@ static int rtpcs_931x_init_mac_groups(struct rtpcs_ctrl *ctrl)
 static int rtpcs_931x_sds_probe(struct rtpcs_serdes *sds)
 {
 	u32 base = RTPCS_931X_SERDES_MODE_CTRL + 4 * (sds->id >> 2);
+	struct device *dev = sds->ctrl->dev;
 	u8 lsb = (sds->id & 3) * 8;
 	int ret;
 
@@ -4286,7 +4584,10 @@ static int rtpcs_931x_sds_probe(struct rtpcs_serdes *sds)
 			return ret;
 	}
 
-	return 0;
+	INIT_DELAYED_WORK(&sds->cali_work, rtpcs_931x_rx_cali_work_handler);
+	INIT_DELAYED_WORK(&sds->linkmon_work, rtpcs_931x_rx_linkmon_work_handler);
+
+	return devm_add_action_or_reset(dev, rtpcs_sds_cancel_rx_work, sds);
 }
 
 static int rtpcs_931x_init(struct rtpcs_ctrl *ctrl)
@@ -4474,6 +4775,13 @@ static int rtpcs_pcs_config(struct phylink_pcs *pcs, unsigned int neg_mode,
 	scoped_guard(mutex, &ctrl->lock) {
 		mode_changed = sds->hw_mode != hw_mode || sds->usxgmii_submode != submode;
 		if (mode_changed) {
+			if (sds->rxcal_pending)
+				dev_dbg(ctrl->dev, "SerDes %u: invalidating pending RX calibration for mode change\n",
+					sds->id);
+			sds->rxcal_pending = false;
+			sds->rxmon_active = false;
+			sds->rxmon_down = 0;
+
 			ret = rtpcs_sds_config_polarity(sds, interface);
 			if (ret < 0) {
 				dev_err(ctrl->dev, "failed to configure polarity of SerDes %u\n",

@@ -60,6 +60,7 @@
 #define RTL838X_VLAN_PORT_TAG_STS_UNTAG				0x0
 #define RTL838X_VLAN_PORT_TAG_STS_TAGGED			0x1
 #define RTL838X_VLAN_PORT_TAG_STS_PRIORITY_TAGGED		0x2
+#define RTL838X_VLAN_PORT_TAG_KEEP_FORMAT			0x1
 
 #define RTL838X_VLAN_PORT_TAG_STS_CTRL_BASE			0xA530
 /* port 0-28 */
@@ -72,6 +73,8 @@
 #define RTL838X_VLAN_PORT_TAG_STS_CTRL_IGR_P_ITAG_KEEP_MASK	GENMASK(5, 4)
 #define RTL838X_VLAN_PORT_TAG_STS_CTRL_OTAG_STS_MASK		GENMASK(3, 2)
 #define RTL838X_VLAN_PORT_TAG_STS_CTRL_ITAG_STS_MASK		GENMASK(1, 0)
+
+#define RTL838X_VLAN_PORT_OTAG_TPID_CMP_MSK(port)		(0xD574 + ((port) << 7))
 
 #define RTL839X_VLAN_PORT_TAG_STS_UNTAG				0x0
 #define RTL839X_VLAN_PORT_TAG_STS_TAGGED			0x1
@@ -87,6 +90,8 @@
 #define RTL839X_VLAN_PORT_TAG_STS_CTRL_EGR_P_ITAG_KEEP_MASK	GENMASK(2, 2)
 #define RTL839X_VLAN_PORT_TAG_STS_CTRL_IGR_P_OTAG_KEEP_MASK	GENMASK(1, 1)
 #define RTL839X_VLAN_PORT_TAG_STS_CTRL_IGR_P_ITAG_KEEP_MASK	GENMASK(0, 0)
+
+#define RTL839X_VLAN_PORT_OTAG_TPID_CMP_MSK(port)		(0x8048 + ((port) << 7))
 
 #define RTL930X_VLAN_PORT_TAG_STS_INTERNAL			0x0
 #define RTL930X_VLAN_PORT_TAG_STS_UNTAG				0x1
@@ -107,8 +112,6 @@
 #define RTL930X_VLAN_TAG_TPID_CTRL(idx)				(0xC7AC + ((idx) << 2))
 #define RTL930X_VLAN_PORT_ITAG_TPID_CMP_MSK(port)		(0x327C + ((port) << 6))
 #define RTL930X_VLAN_PORT_OTAG_TPID_CMP_MSK(port)		(0x3280 + ((port) << 6))
-#define RTL930X_VLAN_PORT_AFT(port)				(0x8260 + ((port) << 2))
-#define RTL930X_VLAN_PORT_AFT_ACCEPT_ALL			GENMASK(3, 0)
 #define RTL930X_VLAN_PORT_EGR_TPID_CTRL(port)			(0xCE98 + ((port) << 2))
 #define RTL930X_VLAN_PORT_EGR_TPID_OTPID_IDX			GENMASK(5, 4)
 #define RTL930X_VLAN_PORT_EGR_TPID_OTPID_KEEP			BIT(3)
@@ -133,6 +136,31 @@
 #define RTL931X_VLAN_PORT_TAG_ITPID_IDX_MASK			GENMASK(2, 1)
 #define RTL931X_VLAN_PORT_TAG_ITPID_KEEP_MASK			GENMASK(0, 0)
 
+#define RTLDSA_VLAN_PORT_AFT_ITAG_UNTAG		BIT(1)
+#define RTLDSA_VLAN_PORT_AFT_OTAG_UNTAG		BIT(3)
+#define RTLDSA_VLAN_PORT_AFT_ALL		GENMASK(3, 0)
+
+/*
+ * Every port is a member of VID 0 for the frames the CPU sends, see
+ * otto_vlan_setup(). A port without PVID in a VLAN-filtering bridge must not
+ * flood its untagged frames there, so it accepts only tagged ones, outer tagged
+ * ones as an 802.1ad port. Standalone ports can have VLAN filtering on.
+ */
+void otto_vlan_port_untagged_set(struct otto_dsa_priv *priv, int port)
+{
+	struct rtldsa_port *p = &priv->ports[port];
+	u32 aft = RTLDSA_VLAN_PORT_AFT_ALL;
+
+	if (!priv->r->vlan_port_aft || port == priv->r->cpu_port)
+		return;
+
+	if (p->bridged && p->vlan_filtering && !p->pvid)
+		aft &= ~(p->qinq ? RTLDSA_VLAN_PORT_AFT_OTAG_UNTAG :
+				   RTLDSA_VLAN_PORT_AFT_ITAG_UNTAG);
+
+	regmap_write(priv->map, priv->r->vlan_port_aft + (port << 2), aft);
+}
+
 static void otto_vlan_port_pvid_set(struct otto_dsa_priv *priv,
 				    int port, int pvid)
 {
@@ -145,6 +173,7 @@ static void otto_vlan_port_pvid_set(struct otto_dsa_priv *priv,
 					PBVLAN_MODE_UNTAG_AND_PRITAG);
 
 	priv->ports[port].pvid = pvid;
+	otto_vlan_port_untagged_set(priv, port);
 }
 
 /* Initialize all VLANS */
@@ -241,7 +270,7 @@ void otto_vlan_838x_port_forward_on_inner(struct otto_dsa_priv *priv, int port, 
 }
 
 int
-otto_vlan_838x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vlan_profile *profile)
+otto_vlan_838x_profile_get(struct otto_dsa_priv *priv, int idx, struct otto_vlan_profile *profile)
 {
 	u32 p;
 
@@ -250,7 +279,7 @@ otto_vlan_838x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 
 	regmap_read(priv->map, RTL838X_VLAN_PROFILE(idx), &p);
 
-	*profile = (struct rtldsa_vlan_profile) {
+	*profile = (struct otto_vlan_profile) {
 		.l2_learn = RTL838X_VLAN_L2_LEARN_EN_R(p),
 		.unkn_mc_fld.pmsks_idx = {
 			.l2 = RTL838X_VLAN_L2_UNKN_MC_FLD_PMSK(p),
@@ -306,10 +335,31 @@ void otto_vlan_838x_port_pvid_set(struct otto_dsa_priv *priv, int port, enum pbv
 				  pvid << 16);
 }
 
+void otto_vlan_838x_port_qinq_set(struct otto_dsa_priv *priv, int port, bool enable)
+{
+	otto_vlan_838x_port_forward_on_inner(priv, port, !enable);
+	regmap_write(priv->map, RTL838X_VLAN_PORT_OTAG_TPID_CMP_MSK(port), enable ? BIT(0) : 0);
+
+	if (!enable) {
+		otto_vlan_838x_port_keep_tag_set(priv, port, false, true);
+		return;
+	}
+
+	regmap_write(priv->map, RTL838X_VLAN_PORT_TAG_STS_CTRL(port),
+		     FIELD_PREP(RTL838X_VLAN_PORT_TAG_STS_CTRL_OTAG_STS_MASK,
+				RTL838X_VLAN_PORT_TAG_STS_TAGGED) |
+		     FIELD_PREP(RTL838X_VLAN_PORT_TAG_STS_CTRL_ITAG_STS_MASK,
+				RTL838X_VLAN_PORT_TAG_STS_UNTAG) |
+		     FIELD_PREP(RTL838X_VLAN_PORT_TAG_STS_CTRL_EGR_P_ITAG_KEEP_MASK,
+				RTL838X_VLAN_PORT_TAG_KEEP_FORMAT) |
+		     FIELD_PREP(RTL838X_VLAN_PORT_TAG_STS_CTRL_IGR_P_ITAG_KEEP_MASK,
+				RTL838X_VLAN_PORT_TAG_KEEP_FORMAT));
+}
+
 void
 otto_vlan_838x_profile_dump(struct otto_dsa_priv *priv, int idx)
 {
-	struct rtldsa_vlan_profile p;
+	struct otto_vlan_profile p;
 
 	if (otto_vlan_838x_profile_get(priv, idx, &p) < 0)
 		return;
@@ -384,13 +434,13 @@ void otto_vlan_839x_set_untagged(u32 vlan, u64 portmask)
 void otto_vlan_839x_port_forward_on_inner(struct otto_dsa_priv *priv, int port, bool is_set)
 {
 	if (is_set)
-		rtl839x_mask_port_reg_be(BIT_ULL(port), 0ULL, RTL839X_VLAN_PORT_FWD);
+		rtl839x_mask_port_reg_le(BIT_ULL(port), 0ULL, RTL839X_VLAN_PORT_FWD);
 	else
-		rtl839x_mask_port_reg_be(0ULL, BIT_ULL(port), RTL839X_VLAN_PORT_FWD);
+		rtl839x_mask_port_reg_le(0ULL, BIT_ULL(port), RTL839X_VLAN_PORT_FWD);
 }
 
 int
-otto_vlan_839x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vlan_profile *profile)
+otto_vlan_839x_profile_get(struct otto_dsa_priv *priv, int idx, struct otto_vlan_profile *profile)
 {
 	u32 p[2];
 
@@ -400,7 +450,7 @@ otto_vlan_839x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 	regmap_read(priv->map, RTL839X_VLAN_PROFILE(idx), &p[0]);
 	regmap_read(priv->map, RTL839X_VLAN_PROFILE(idx) + 4, &p[1]);
 
-	*profile = (struct rtldsa_vlan_profile) {
+	*profile = (struct otto_vlan_profile) {
 		.l2_learn = RTL839X_VLAN_L2_LEARN_EN_R(p),
 		.unkn_mc_fld.pmsks_idx = {
 			.l2 = RTL839X_VLAN_L2_UNKN_MC_FLD_PMSK(p),
@@ -429,7 +479,7 @@ void otto_vlan_839x_profile_setup(struct otto_dsa_priv *priv, int profile)
 void
 otto_vlan_839x_profile_dump(struct otto_dsa_priv *priv, int idx)
 {
-	struct rtldsa_vlan_profile p;
+	struct otto_vlan_profile p;
 	u32 raw[2];
 
 	if (otto_vlan_839x_profile_get(priv, idx, &p) < 0)
@@ -479,6 +529,25 @@ void otto_vlan_839x_port_pvid_set(struct otto_dsa_priv *priv, int port, enum pbv
 				  pvid << 16);
 }
 
+void otto_vlan_839x_port_qinq_set(struct otto_dsa_priv *priv, int port, bool enable)
+{
+	otto_vlan_839x_port_forward_on_inner(priv, port, !enable);
+	regmap_write(priv->map, RTL839X_VLAN_PORT_OTAG_TPID_CMP_MSK(port), enable ? BIT(0) : 0);
+
+	if (!enable) {
+		otto_vlan_839x_port_keep_tag_set(priv, port, false, true);
+		return;
+	}
+
+	regmap_write(priv->map, RTL839X_VLAN_PORT_TAG_STS_CTRL(port),
+		     FIELD_PREP(RTL839X_VLAN_PORT_TAG_STS_CTRL_OTAG_STS_MASK,
+				RTL839X_VLAN_PORT_TAG_STS_TAGGED) |
+		     FIELD_PREP(RTL839X_VLAN_PORT_TAG_STS_CTRL_ITAG_STS_MASK,
+				RTL839X_VLAN_PORT_TAG_STS_UNTAG) |
+		     RTL839X_VLAN_PORT_TAG_STS_CTRL_EGR_P_ITAG_KEEP_MASK |
+		     RTL839X_VLAN_PORT_TAG_STS_CTRL_IGR_P_ITAG_KEEP_MASK);
+}
+
 /* RTL930x VLAN operations */
 void otto_vlan_930x_tables_read(u32 vlan, struct otto_vlan_info *info)
 {
@@ -524,7 +593,7 @@ void otto_vlan_930x_set_tagged(u32 vlan, struct otto_vlan_info *info)
 }
 
 int
-otto_vlan_930x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vlan_profile *profile)
+otto_vlan_930x_profile_get(struct otto_dsa_priv *priv, int idx, struct otto_vlan_profile *profile)
 {
 	u32 p[5];
 
@@ -534,7 +603,7 @@ otto_vlan_930x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 	for (int i = 0; i < 5; i++)
 		regmap_read(priv->map, RTL930X_VLAN_PROFILE_SET(idx) + i * 4, &p[i]);
 
-	*profile = (struct rtldsa_vlan_profile) {
+	*profile = (struct otto_vlan_profile) {
 		.l2_learn = RTL930X_VLAN_L2_LEARN_EN_R(p),
 		.unkn_mc_fld.pmsks = {
 			.l2 = RTL930X_VLAN_L2_UNKN_MC_FLD_PMSK(p),
@@ -556,7 +625,7 @@ otto_vlan_930x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 void
 otto_vlan_930x_profile_dump(struct otto_dsa_priv *priv, int idx)
 {
-	struct rtldsa_vlan_profile p;
+	struct otto_vlan_profile p;
 	u32 raw[5];
 
 	if (otto_vlan_930x_profile_get(priv, idx, &p) < 0)
@@ -631,8 +700,8 @@ void otto_vlan_930x_qinq_setup(struct otto_dsa_priv *priv)
 		regmap_write(priv->map, RTL930X_VLAN_PORT_ITAG_TPID_CMP_MSK(port), BIT(0));
 		regmap_write(priv->map, RTL930X_VLAN_PORT_OTAG_TPID_CMP_MSK(port),
 			     port == cpu_port ? BIT(0) : 0);
-		regmap_write(priv->map, RTL930X_VLAN_PORT_AFT(port),
-			     RTL930X_VLAN_PORT_AFT_ACCEPT_ALL);
+		regmap_write(priv->map, priv->r->vlan_port_aft + (port << 2),
+			     RTLDSA_VLAN_PORT_AFT_ALL);
 	}
 
 	regmap_write_bits(priv->map, RTL930X_VLAN_PORT_FWD + (cpu_port << 2), GENMASK(3, 0),
@@ -699,7 +768,7 @@ void otto_vlan_930x_port_pvid_set(struct otto_dsa_priv *priv, int port, enum pbv
 
 /* RTL931x VLAN operations */
 int
-otto_vlan_931x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vlan_profile *profile)
+otto_vlan_931x_profile_get(struct otto_dsa_priv *priv, int idx, struct otto_vlan_profile *profile)
 {
 	u32 p[7];
 
@@ -709,7 +778,7 @@ otto_vlan_931x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 	for (int i = 0; i < 7; i++)
 		regmap_read(priv->map, RTL931X_VLAN_PROFILE_SET(idx) + i * 4, &p[i]);
 
-	*profile = (struct rtldsa_vlan_profile) {
+	*profile = (struct otto_vlan_profile) {
 		.l2_learn = RTL931X_VLAN_L2_LEARN_EN_R(p),
 		.unkn_mc_fld.pmsks = {
 			.l2 = RTL931X_VLAN_L2_UNKN_MC_FLD_PMSK(p),
@@ -724,7 +793,7 @@ otto_vlan_931x_profile_get(struct otto_dsa_priv *priv, int idx, struct rtldsa_vl
 void
 otto_vlan_931x_profile_dump(struct otto_dsa_priv *priv, int idx)
 {
-	struct rtldsa_vlan_profile p;
+	struct otto_vlan_profile p;
 
 	if (otto_vlan_931x_profile_get(priv, idx, &p) < 0)
 		return;
@@ -890,20 +959,23 @@ int otto_vlan_port_filtering(struct dsa_switch *ds, int port,
 		 * The Egress filter used 1 bit per state (0: DISABLED, 1: ENABLED)
 		 */
 		if (port != priv->r->cpu_port) {
-			priv->r->set_vlan_igr_filter(port, IGR_DROP);
-			priv->r->set_vlan_egr_filter(port, EGR_ENABLE);
+			priv->r->set_vlan_igr_filter(priv, port, IGR_DROP);
+			priv->r->set_vlan_egr_filter(priv, port, EGR_ENABLE);
 		} else {
-			priv->r->set_vlan_igr_filter(port, IGR_TRAP);
-			priv->r->set_vlan_egr_filter(port, EGR_DISABLE);
+			priv->r->set_vlan_igr_filter(priv, port, IGR_TRAP);
+			priv->r->set_vlan_egr_filter(priv, port, EGR_DISABLE);
 		}
 
 	} else {
 		/* Disable ingress and egress filtering */
 		if (port != priv->r->cpu_port)
-			priv->r->set_vlan_igr_filter(port, IGR_FORWARD);
+			priv->r->set_vlan_igr_filter(priv, port, IGR_FORWARD);
 
-		priv->r->set_vlan_egr_filter(port, EGR_DISABLE);
+		priv->r->set_vlan_egr_filter(priv, port, EGR_DISABLE);
 	}
+
+	priv->ports[port].vlan_filtering = vlan_filtering;
+	otto_vlan_port_untagged_set(priv, port);
 
 	/* Do we need to do something to the CPU-Port, too? */
 	mutex_unlock(&priv->reg_mutex);
@@ -1047,7 +1119,7 @@ int otto_vlan_port_del(struct dsa_switch *ds, int port,
 
 		info.fid = 0;
 
-		rtldsa_mst_put_slot(priv, mst);
+		otto_stp_slot_put(priv, mst);
 	}
 
 	priv->r->vlan_set_untagged(vlan->vid, info.untagged_ports);
@@ -1089,7 +1161,7 @@ int otto_vlan_msti_set(struct dsa_switch *ds, struct dsa_bridge bridge,
 		mst_slot_old = info.fid;
 
 		/* find HW slot for MSTI */
-		mst_slot = rtldsa_mst_replace(priv, msti->msti, mst_slot_old);
+		mst_slot = otto_stp_slot_replace(priv, msti->msti, mst_slot_old);
 		if (mst_slot < 0)
 			return mst_slot;
 

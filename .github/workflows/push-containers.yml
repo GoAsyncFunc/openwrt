@@ -10,6 +10,7 @@ on:
       - 'toolchain/**'
     branches-ignore:
       - master
+      - r66s
 
 permissions:
   contents: read
