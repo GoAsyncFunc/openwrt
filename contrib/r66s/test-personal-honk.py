@@ -20,10 +20,15 @@ class PersonalHonkTest(unittest.TestCase):
                 for table in ('admin', 'subscription_body', 'dns_answer', 'delay_sample'):
                     db.execute(f'CREATE TABLE {table} (value TEXT)')
                     db.execute(f'INSERT INTO {table} VALUES (?)', ('fixture',))
+                db.execute('CREATE TABLE revision (number INTEGER PRIMARY KEY, parent INTEGER)')
+                db.executemany('INSERT INTO revision VALUES (?, ?)', [(1, None), (2, 1)])
+                db.execute('CREATE TABLE head (id INTEGER PRIMARY KEY, active INTEGER)')
+                db.execute('INSERT INTO head VALUES (1, 2)')
             bundle = {
                 'config': "dns {\n bind: 'tcp+udp://127.0.0.1:5353'\n}\nsubscription {\n}\n",
                 'system': "password_auth: true\nallow_anonymous_loopback: false\nbootstrap_resolver: '127.0.0.1:5336'\n",
                 'mosdns_whitelist': 'domain:example.net\n',
+                'mosdns_config': 'plugins: []\n',
                 'database': base64.b64encode(gzip.compress((root / 'state.db').read_bytes())).decode(),
             }
             module.prepare(bundle, root / 'files')
@@ -31,12 +36,18 @@ class PersonalHonkTest(unittest.TestCase):
             self.assertEqual(state.stat().st_mode & 0o777, 0o600)
             self.assertEqual((root / 'files/etc/mosdns/rule/whitelist.txt').read_text(),
                              'domain:example.net\n')
+            self.assertEqual((root / 'files/etc/mosdns/config_custom.yaml').read_text(),
+                             'plugins: []\n')
             with sqlite3.connect(state) as db:
                 self.assertEqual(db.execute('SELECT count(*) FROM admin').fetchone()[0], 1)
                 self.assertEqual(db.execute('SELECT count(*) FROM subscription_body').fetchone()[0], 1)
                 self.assertEqual(db.execute('SELECT count(*) FROM dns_answer').fetchone()[0], 0)
-            original_system = bundle['system']
-            bundle['system'] = original_system.replace("bootstrap_resolver: '127.0.0.1:5336'", '')
+                self.assertEqual(db.execute('SELECT number, parent FROM revision').fetchall(), [(2, None)])
+            # The global block is now in the main source, not the native API include.
+            bundle['system'] = bundle['system'].replace("bootstrap_resolver: '127.0.0.1:5336'\n", '')
+            bundle['config'] += "global {\n bootstrap_resolver: '127.0.0.1:5336'\n}\n"
+            module.prepare(bundle, root / 'main-global')
+            bundle['config'] = bundle['config'].split('global {')[0]
             with self.assertRaises(ValueError):
                 module.prepare(bundle, root / 'rejected')
             bundle['system'] = 'password_auth: false'

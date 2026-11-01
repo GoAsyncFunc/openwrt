@@ -7,12 +7,18 @@ installed but disabled, including automatic subscription updates. AdGuard Home
 owns port 53; MosDNS on loopback 5335 sends foreign queries to Honk on 5353.
 dnsmasq on 54 keeps DHCP/local names; bootstrap DNS on 5336 is independent.
 
-Generic firmware contains no Honk account or personal subscription. It provides
-direct DoH until Honk initialization. The private preconfigured workflow in
+Generic firmware contains the owner-authorized public Taohua subscription,
+but no Honk administrator or other personal subscriptions. Its default proxy
+group excludes domestic exits; the full subscription stays in `taohua`.
+It provides direct DoH until Honk initialization. The private preconfigured workflow in
 `GoAsyncFunc/openwrt-actions` uses `prepare-personal-honk.py` to add an initialized
 account and cached subscriptions to a disposable repack container, producing a
 private firmware artifact without writing personal state to Git or GHCR.
-Honk failure after initialization does not silently fall back to direct DNS.
+Honk runs in database mode, with main-source global settings, IPv4-preferred
+DNS, NFQUEUE and the router-tested port/check/TLS/preconnection defaults.
+The private capture reads the active database revision, not stale disk sources,
+and preserves the actual MosDNS configuration and whitelist. Honk failure after
+initialization does not silently fall back to direct DNS.
 Both firmware workflows remain manual-only. The older OpenClash sections below
 describe the retained integration, not the current default service.
 

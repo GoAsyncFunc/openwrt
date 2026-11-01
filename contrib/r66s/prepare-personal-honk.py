@@ -24,7 +24,7 @@ def prepare(bundle, overlay):
         raise ValueError('Missing Honk DNS listener or subscription')
     if 'password_auth: true' not in system or 'allow_anonymous_loopback: false' not in system:
         raise ValueError('Authenticated native API required')
-    if "bootstrap_resolver: '127.0.0.1:5336'" not in system:
+    if "bootstrap_resolver: '127.0.0.1:5336'" not in config + system:
         raise ValueError('Independent node bootstrap DNS required')
     database = gzip.decompress(base64.b64decode(bundle['database'], validate=True))
     if len(database) > 4 * 1024 * 1024:
@@ -42,6 +42,11 @@ def prepare(bundle, overlay):
             # Keep authentication and subscription cache, omit runtime DNS/delay history.
             db.execute('DELETE FROM dns_answer')
             db.execute('DELETE FROM delay_sample')
+            # Old revisions contain private URLs too and need not inflate the Actions secret.
+            active = db.execute('SELECT active FROM head WHERE id=1').fetchone()
+            if active:
+                db.execute('UPDATE revision SET parent=NULL WHERE number=?', active)
+                db.execute('DELETE FROM revision WHERE number<>?', active)
             db.commit()
             db.execute('VACUUM')
         database = path.read_bytes()
@@ -50,6 +55,8 @@ def prepare(bundle, overlay):
     write_private(overlay / 'etc/honk/system.dae', system)
     if 'mosdns_whitelist' in bundle:
         write_private(overlay / 'etc/mosdns/rule/whitelist.txt', bundle['mosdns_whitelist'])
+    if 'mosdns_config' in bundle:
+        write_private(overlay / 'etc/mosdns/config_custom.yaml', bundle['mosdns_config'])
     write_private(overlay / 'etc/honk/state/honk.db', database)
     (overlay / 'etc/honk/state').chmod(0o700)
     write_private(overlay / 'etc/config/honk', """config honk 'main'

@@ -188,7 +188,8 @@ jobs:
           python3 contrib/r66s/test-personal-honk.py
           grep -Fq "bind: 'tcp+udp://127.0.0.1:5353'" package/openwrt-packages/honk/files/config.dae
           grep -Fq 'dport(53) -> direct(must)' package/openwrt-packages/honk/files/config.dae
-          grep -Fq "bootstrap_resolver: '127.0.0.1:5336'" package/openwrt-packages/honk/files/system.dae
+          grep -Fq "bootstrap_resolver: '127.0.0.1:5336'" package/openwrt-packages/honk/files/config.dae
+          grep -Fq -- '--store db --data-dir /etc/honk' package/openwrt-packages/honk/files/honk.init
           for package in zram-swap kmod-zram block-mount kmod-fs-ext4 e2fsprogs sfdisk partx-utils; do
             grep -qx "CONFIG_PACKAGE_${package}=y" .config
           done
@@ -277,6 +278,9 @@ jobs:
           test -x "${roots[0]}/usr/bin/honk-core"
           file "${roots[0]}/usr/bin/honk-core" | grep -q 'ARM aarch64'
           test -x "${roots[0]}/etc/init.d/honk"
+          grep -Fq -- '--store db --data-dir /etc/honk' "${roots[0]}/etc/init.d/honk"
+          cmp package/openwrt-packages/honk/files/config.dae "${roots[0]}/etc/honk/config.dae"
+          cmp package/openwrt-packages/honk/files/system.dae "${roots[0]}/etc/honk/system.dae"
           grep -Fq "bind: 'tcp+udp://127.0.0.1:5353'" "${roots[0]}/etc/honk/config.dae"
           test -s "${roots[0]}/usr/share/doona/index.html"
           test -s "${roots[0]}/usr/lib/lua/luci/i18n/honk.zh-cn.lmo"
